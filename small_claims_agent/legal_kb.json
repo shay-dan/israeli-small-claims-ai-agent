@@ -1,0 +1,99 @@
+[
+  {
+    "id": "sale-law-11",
+    "categories": ["consumer_product"],
+    "law_name": "חוק המכר, התשכ״ח-1968",
+    "section": "11",
+    "quote_he": "מסירת נכס שאין בו האיכות או התכונות הדרושות לשימושו הרגיל עשויה להיחשב אי-התאמה.",
+    "source_url": "https://fs.knesset.gov.il/6/law/6_lsr_208564.PDF",
+    "source_kind": "official_primary",
+    "excerpt_kind": "summary",
+    "effective_date": "1968-07-19",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "contracts-remedies-9",
+    "categories": ["consumer_product", "service_contract", "landlord_tenant"],
+    "law_name": "חוק החוזים (תרופות בשל הפרת חוזה), התשל״א-1970",
+    "section": "9",
+    "quote_he": "משבוטל החוזה, חייב המפר להשיב לנפגע מה שקיבל על פי החוזה, והנפגע חייב להשיב למפר מה שקיבל, בכפוף להוראות הסעיף.",
+    "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
+    "source_kind": "official_primary",
+    "excerpt_kind": "quote",
+    "effective_date": "1970-12-24",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "contracts-remedies-2",
+    "categories": ["consumer_product", "service_contract", "landlord_tenant"],
+    "law_name": "חוק החוזים (תרופות בשל הפרת חוזה), התשל״א-1970",
+    "section": "2",
+    "quote_he": "הופר חוזה, זכאי הנפגע לתבוע את אכיפתו או לבטל את החוזה, וזכאי הוא לפיצויים, בנוסף על אחת התרופות האמורות או במקומן, והכל לפי הוראות חוק זה.",
+    "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
+    "source_kind": "official_primary",
+    "excerpt_kind": "quote",
+    "effective_date": "1970-12-24",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "consumer-warranty-regulations",
+    "categories": ["consumer_product"],
+    "law_name": "תקנות הגנת הצרכן (אחריות ושירות לאחר מכירה), התשס״ו-2006",
+    "section": "2, 6 ו-10 (לפי העניין)",
+    "quote_he": "במוצרי חשמל, אלקטרוניקה וגז חדשים שמחירם לצרכן גבוה מ-150 ₪ חלה, ככלל, תקופת אחריות של שנה וחובת תיקון בתקופת האחריות; זהות הגורם החייב והחריגים תלויים בהוראות התקנות ובנסיבות.",
+    "source_url": "https://he.wikisource.org/wiki/תקנות_הגנת_הצרכן_(אחריות_ושירות_לאחר_מכירה)",
+    "source_kind": "public_consolidation",
+    "excerpt_kind": "summary",
+    "verification_url": "https://www.gov.il/BlobFolder/reports/pfta_annual_reports/he/docs_cpfta_AnnualRepot2012.pdf",
+    "effective_date": "2006-09-18",
+    "verified_at": "2026-10-10"
+  },
+  {
+    "id": "contracts-remedies-10",
+    "categories": ["consumer_product", "service_contract", "landlord_tenant"],
+    "law_name": "חוק החוזים (תרופות בשל הפרת חוזה), התשל״א-1970",
+    "section": "10",
+    "quote_he": "הנפגע זכאי לפיצויים בעד הנזק שנגרם לו עקב ההפרה ותוצאותיה ושהמפר ראה אותו או שהיה עליו לראותו מראש, בעת כריתת החוזה, כתוצאה מסתברת של ההפרה.",
+    "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
+    "source_kind": "official_primary",
+    "excerpt_kind": "quote",
+    "effective_date": "1970-12-24",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "contracts-remedies-13",
+    "categories": ["consumer_product", "service_contract", "landlord_tenant"],
+    "law_name": "חוק החוזים (תרופות בשל הפרת חוזה), התשל״א-1970",
+    "section": "13",
+    "quote_he": "גרמה הפרת החוזה נזק שאינו נזק ממון, רשאי בית המשפט לפסוק פיצויים בעד נזק זה בשיעור שייראה לו בנסיבות העניין.",
+    "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
+    "source_kind": "official_primary",
+    "excerpt_kind": "quote",
+    "effective_date": "1970-12-24",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "rent-loan-7",
+    "categories": ["landlord_tenant"],
+    "law_name": "חוק השכירות והשאילה, התשל״א-1971",
+    "section": "7",
+    "quote_he": "המשכיר חייב, תוך זמן סביר לאחר שקיבל דרישה לכך מאת השוכר, לתקן במושכר דבר השולל או מגביל הגבלה של ממש את השימוש במושכר, בכפוף להוראות ולחריגים שבדין.",
+    "source_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000596",
+    "source_kind": "official_primary",
+    "excerpt_kind": "summary",
+    "effective_date": "2026-03-31",
+    "verified_at": "2026-08-18"
+  },
+  {
+    "id": "rent-loan-25i-e",
+    "categories": ["landlord_tenant"],
+    "law_name": "חוק השכירות והשאילה, התשל״א-1971",
+    "section": "25י(ה)",
+    "quote_he": "הסתיימה תקופת השכירות, ישיב המשכיר לשוכר את הערובה או את יתרתה לאחר המימוש, לרבות פירותיה, בתוך 60 ימים ממועד השבת הדירה המושכרת לרשותו או עד למועד שבו נפרעו חובות השוכר שבגינם ניתן לממש את הערובה, לפי המאוחר.",
+    "source_url": "https://fs.knesset.gov.il/20/law/20_lsr_389390.pdf",
+    "source_kind": "official_primary",
+    "excerpt_kind": "quote",
+    "effective_date": "2017-09-17",
+    "verified_at": "2026-08-24"
+  }
+]

@@ -1,0 +1,25 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+release/
+output/smoke/
+output/deep_audit/
+output/smoke_test_report.md
+output/smoke_test_results.json
+output/deep_audit_report.md
+output/deep_audit_results.json
+logs/
+*.log
+.coverage
+htmlcov/
+
+# Local artifacts unrelated to this repository
+output/cv/
+scripts/create_updated_cvs.py
+scripts/fit_genai_cv_one_page.py
+scripts/reflow_genai_cv.py
+output/deep_audit_manual_results.json
+output/deep_smoke_test_report.md

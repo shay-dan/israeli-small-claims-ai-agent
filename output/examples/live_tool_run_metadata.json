@@ -1,0 +1,101 @@
+[
+  {
+    "scenario": "restaurant_duplicate_charge",
+    "opening_model": "gemini-3.5-flash",
+    "accepted_interview_fields": 20,
+    "consistency": "pass",
+    "case_validation": "pass",
+    "category": "service_contract",
+    "court_city": "ירושלים",
+    "claim_total": "10000",
+    "estimated_fee": "100",
+    "authority_ids": [
+      "contracts-remedies-2",
+      "contracts-remedies-9"
+    ],
+    "draft_model": "gemini-3.5-flash",
+    "rejected_draft_attempts": 0,
+    "draft_review": "pass",
+    "local_draft_validation": "pass",
+    "warnings": [
+      "מספר הזיהוי של הנתבע אינו ידוע. ניתן להגיש תביעה, אך ללא מספר מזהה עלול להיות קושי בפתיחת תיק הוצאה לפועל אם פסק הדין לא יקויים."
+    ],
+    "output": "output/pdf/tool_run_restaurant_duplicate_charge.pdf",
+    "pdf_pages": 1
+  },
+  {
+    "scenario": "online_course_cancellation",
+    "opening_model": "gemini-3.5-flash",
+    "accepted_interview_fields": 20,
+    "consistency": "pass",
+    "case_validation": "pass",
+    "category": "service_contract",
+    "court_city": "תל אביב-יפו",
+    "claim_total": "20000",
+    "estimated_fee": "200",
+    "authority_ids": [
+      "contracts-remedies-2",
+      "contracts-remedies-9"
+    ],
+    "draft_model": "gemini-3.5-flash",
+    "rejected_draft_attempts": 0,
+    "draft_review": "pass",
+    "local_draft_validation": "pass",
+    "warnings": [
+      "מספר הזיהוי של הנתבע אינו ידוע. ניתן להגיש תביעה, אך ללא מספר מזהה עלול להיות קושי בפתיחת תיק הוצאה לפועל אם פסק הדין לא יקויים."
+    ],
+    "output": "output/pdf/tool_run_online_course_cancellation.pdf",
+    "pdf_pages": 1
+  },
+  {
+    "scenario": "moving_service_no_show",
+    "opening_model": "gemini-3.5-flash",
+    "accepted_interview_fields": 20,
+    "consistency": "pass",
+    "case_validation": "pass",
+    "category": "service_contract",
+    "court_city": "חיפה",
+    "claim_total": "3300",
+    "estimated_fee": "50",
+    "authority_ids": [
+      "contracts-remedies-10",
+      "contracts-remedies-2",
+      "contracts-remedies-9"
+    ],
+    "draft_model": "gemini-3.5-flash",
+    "rejected_draft_attempts": 0,
+    "draft_review": "pass",
+    "local_draft_validation": "pass",
+    "warnings": [
+      "מספר הזיהוי של הנתבע אינו ידוע. ניתן להגיש תביעה, אך ללא מספר מזהה עלול להיות קושי בפתיחת תיק הוצאה לפועל אם פסק הדין לא יקויים."
+    ],
+    "output": "output/pdf/tool_run_moving_service_no_show.pdf",
+    "pdf_pages": 1
+  },
+  {
+    "scenario": "broken_laptop",
+    "opening_model": "gemini-3.5-flash",
+    "accepted_interview_fields": 20,
+    "consistency": "pass",
+    "case_validation": "pass",
+    "category": "consumer_product",
+    "court_city": "באר שבע",
+    "claim_total": "4000",
+    "estimated_fee": "50",
+    "authority_ids": [
+      "consumer-warranty-regulations",
+      "contracts-remedies-2",
+      "contracts-remedies-9",
+      "sale-law-11"
+    ],
+    "draft_model": "gemini-3.5-flash",
+    "rejected_draft_attempts": 0,
+    "draft_review": "pass",
+    "local_draft_validation": "pass",
+    "warnings": [
+      "מספר הזיהוי של הנתבע אינו ידוע. ניתן להגיש תביעה, אך ללא מספר מזהה עלול להיות קושי בפתיחת תיק הוצאה לפועל אם פסק הדין לא יקויים."
+    ],
+    "output": "output/pdf/tool_run_broken_laptop.pdf",
+    "pdf_pages": 1
+  }
+]

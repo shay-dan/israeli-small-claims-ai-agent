@@ -1,0 +1,24 @@
+{
+  "output": "output/pdf/tool_run_rental_claim.pdf",
+  "opening_extraction_model": "gemini-3.5-flash",
+  "accepted_interview_fields": 20,
+  "consistency_checkpoint": "pass",
+  "case_validation": "pass",
+  "category": "landlord_tenant",
+  "court_city": "ירושלים",
+  "claim_total": "5000",
+  "estimated_fee": "50",
+  "authority_ids": [
+    "contracts-remedies-2",
+    "contracts-remedies-9",
+    "rent-loan-25i-e"
+  ],
+  "draft_model": "gemini-3.5-flash",
+  "rejected_gemini_draft_attempts": 0,
+  "draft_review": "pass",
+  "local_draft_validation": "pass",
+  "pdf_pages": 1,
+  "warnings": [
+    "מספר הזיהוי של הנתבע אינו ידוע. ניתן להגיש תביעה, אך ללא מספר מזהה עלול להיות קושי בפתיחת תיק הוצאה לפועל אם פסק הדין לא יקויים."
+  ]
+}

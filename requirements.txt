@@ -1,0 +1,11 @@
+streamlit>=1.48,<2
+langgraph>=1.0,<2
+langchain-google-genai>=4.0,<5
+google-genai>=1.0,<2
+pydantic>=2.8,<3
+python-dotenv>=1.0,<2
+reportlab>=4.4.9,<5
+python-bidi>=0.6,<1
+pypdf>=5,<7
+pypdfium2>=4,<6
+pytest>=8,<10
