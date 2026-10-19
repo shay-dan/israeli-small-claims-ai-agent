@@ -1,5 +1,7 @@
 # Israeli Small Claims AI Agent
 
+[![Tests](https://github.com/shay-dan/israeli-small-claims-ai-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/shay-dan/israeli-small-claims-ai-agent/actions/workflows/tests.yml)
+
 An end-to-end Hebrew conversational assistant that interviews a user, validates an Israeli small-claims case, retrieves a narrowly scoped set of legal sources, generates an editable court draft, and exports a right-to-left PDF plus a separate source/quality report.
 
 > Educational portfolio project only. It is not legal advice and must not be used with real personal data without an appropriate privacy and security review.
@@ -129,6 +131,7 @@ All names, contact details and identifiers in the included examples are fictiona
 ## Privacy and legal-source boundaries
 
 - Identification and contact answers are collected in dedicated local-only fields and redacted from model context.
+- Non-identifying case facts may still be sent to whichever configured external LLM provider handles a request; review that provider's current privacy and retention terms before use. Do not enter real case details or personal data in this educational demo.
 - The first free-text message is screened for common PII patterns before any provider call. This is a safety guard, not a guarantee against every possible identifier.
 - In-session diagnostics contain parser decisions, not message content. Persistent log files are opt-in.
 - The legal knowledge base is small and manually curated. Every record labels whether it is an official primary source, official guidance, or a public consolidation, and whether the stored text is a quotation or a summary.
@@ -156,7 +159,7 @@ docs/                          Screenshot and recorded walkthrough
 
 ## Known production gaps
 
-This is a polished MVP, not a production legal service. Production work would include authenticated encrypted persistence, a maintained legal-content pipeline, accessibility and cross-browser testing, observability without sensitive data, rate limiting, deployment hardening, and professional legal/privacy review.
+This is a polished MVP, not a production legal service. The curated legal corpus and filing-fee/jurisdiction assumptions can become outdated and must be independently verified; generated drafts are not legal advice and are not guaranteed to be accepted by a court. Production work would include authenticated encrypted persistence, a maintained and versioned legal-content pipeline, accessibility and cross-browser testing, observability without sensitive data, rate limiting, deployment hardening, and professional legal/privacy review.
 
 ## License
 
