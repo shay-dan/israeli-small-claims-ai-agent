@@ -27,6 +27,8 @@ def _definite_subject(product: str) -> str:
     product = product.strip()
     if not product:
         return "המוצר או השירות"
+    if product.startswith("מכונת "):
+        return "מכונת ה" + product[len("מכונת "):]
     return product if product.startswith("ה") else f"ה{product}"
 
 
@@ -54,7 +56,11 @@ def _formal_first_person_defect(text: str, product: str) -> str:
         return f"{subject} התקלקל{timing}."
     if re.search(r"(?:הפסיק|הפסיקה|חדל|חדלה)\s+(?:לעבוד|לפעול)|לא\s+(?:עובד|פועל)", text):
         return f"{subject} הפסיק לפעול{timing}."
-    if re.search(r"התפוצץ", text):
+    if re.search(r"התפוצץ|התפוצצה|התפוצצו", text):
+        if re.search(r"התפוצצה", text):
+            return f"{subject} התפוצצה{timing}."
+        if re.search(r"התפוצצו", text):
+            return f"{subject} התפוצצו{timing}."
         return f"{subject} התפוצץ{timing}."
     if re.search(r"התפנצ['׳]ר", text):
         return f"{subject} התפנצ׳ר{timing}."
@@ -96,14 +102,14 @@ def formal_event_fact(case: CaseData) -> str:
         r"([^,.;]{0,90}(?:התקלקל|התקלקלה|לא\s+עובד|לא\s+פועל|הפסיק\s+לעבוד|"
         r"הפסיקה\s+לעבוד|הפסיק\s+לפעול|הפסיקה\s+לפעול|חדל\s+לפעול|חדלה\s+לפעול|"
         r"נשבר|שבור(?:ה|ים|ות)?|סדוק(?:ה|ים|ות)?|"
-        r"פג(?:ום|ומה|ומים|ומות)|קרוע(?:ה|ים|ות)?|התפוצץ|התפנצ['׳]ר)[^,.;]{0,60})",
+        r"פג(?:ום|ומה|ומים|ומות)|קרוע(?:ה|ים|ות)?|התפוצץ|התפוצצה|התפוצצו|התפנצ['׳]ר)[^,.;]{0,60})",
         defect_text,
     )
     if defect_clause:
         detail = defect_clause.group(1).strip(" ,.;")
         detail = re.sub(r"\s+שנרכש\s+תמורת\s+[\d,]+\s*(?:₪|שקל(?:ים)?)\s*", " ", detail)
         detail = re.sub(
-            r"^([א-ת][א-ת״׳'\-]*)\s+(?=(?:הפסיק|הפסיקה|חדל|חדלה|נשבר|התפוצץ|התפנצ))",
+            r"^([א-ת][א-ת״׳'\-]*)\s+(?=(?:הפסיק|הפסיקה|חדל|חדלה|נשבר|התפוצץ|התפוצצה|התפוצצו|התפנצ))",
             lambda match: (match.group(1) if match.group(1).startswith("ה") else "ה" + match.group(1)) + " ",
             detail,
         )
@@ -112,8 +118,8 @@ def formal_event_fact(case: CaseData) -> str:
         detail = re.sub(r"^(?:ואחרי|אחרי|לאחר)\s+", "לאחר ", detail)
         detail = re.sub(r"\b(?:הוא|היא)\b", product, detail, count=1)
         if re.search(r"(?:^|\s)(?:אני|קניתי|רכשתי|שילמתי|פתחתי|ראיתי|גיליתי)(?:\s|$)", detail):
-            if "התפוצץ" in detail:
-                detail = f"{product} התפוצץ במהלך השימוש"
+            if re.search(r"התפוצץ|התפוצצה|התפוצצו", detail):
+                detail = f"{_definite_subject(product)} התפוצצה במהלך השימוש"
             elif re.search(r"התפנצ['׳]ר", detail):
                 detail = f"{product} התפנצ׳ר במהלך השימוש"
             elif re.search(
@@ -148,13 +154,16 @@ def formal_case_description(case: CaseData) -> str:
 def formalize_resolution_attempt(attempt: str, case: CaseData) -> str:
     """Formalize common first-person contact descriptions without adding facts."""
     text = " ".join(attempt.split()).strip(" .")
-    if not re.search(r"(?:פניתי|התקשרתי|צלצלתי|חייגתי|שלחתי|כתבתי|הגעתי|באתי|ניסיתי)", text):
+    if not re.search(r"(?:פניתי|התקשרתי|צלצלתי|חייגתי|שלחתי|כתבתי|הגעתי|באתי|הלכתי|חזרתי|ניסיתי)", text):
         return text + ("" if text.endswith(".") else ".")
 
     frequency = r"(?:פעם|פעמיים|(?:אחת|אחד|שתיים|שתי|שניים|שלוש|שלושה|ארבע|ארבעה|חמש|חמישה|שש|שישה|שבע|שבעה|שמונה|תשע|תשעה|עשר|עשרה|\d+)\s+פעמים)"
 
     def nearby_frequency(channel_pattern: str) -> str:
-        after = re.search(rf"(?:{channel_pattern})\s+(?P<count>{frequency})", text)
+        after = re.search(
+            rf"(?:{channel_pattern})(?:\s+(?:ל[א-ת]+|ב[א-ת]+|אל[א-ת]*)){{0,2}}\s+(?P<count>{frequency})",
+            text,
+        )
         if after:
             return after.group("count")
         before = re.search(rf"(?P<count>{frequency})\s+(?:ב)?(?:{channel_pattern})", text)
@@ -170,8 +179,8 @@ def formalize_resolution_attempt(attempt: str, case: CaseData) -> str:
     if re.search(r"(?:וואטסאפ|ווטסאפ|מסרון|הודעה)", text):
         count = nearby_frequency(r"וואטסאפ|ווטסאפ|מסרון|הודעה")
         channels.append(f"{count + ' ' if count else ''}בהודעה")
-    if re.search(r"(?:הגעתי|באתי|ניגשתי|הגעה|פיזית)(?:\s+(?:לחנות|לסניף))?", text):
-        count = nearby_frequency(r"הגעתי|באתי|ניגשתי|הגעה|פיזית")
+    if re.search(r"(?:הגעתי|באתי|ניגשתי|הלכתי|חזרתי|הגעה|פיזית)(?:\s+(?:לחנות|לסניף|לשם))?", text):
+        count = nearby_frequency(r"הגעתי|באתי|ניגשתי|הלכתי|חזרתי|הגעה|פיזית")
         channels.append(f"{count + ' ' if count else ''}באופן פיזי")
 
     if channels:
@@ -189,6 +198,8 @@ def formalize_resolution_attempt(attempt: str, case: CaseData) -> str:
     outcome_parts: list[str] = []
     if re.search(r"(?:אין\s+החזר|סירב|סירבו|לא\s+מחזיר|לא\s+מוכנ)", text):
         outcome_parts.append("הבקשה נדחתה")
+    if re.search(r"גירש|הוציאו אותי|סילקו אותי", text):
+        outcome_parts.append("התובע/ת גורש/ה מן המקום במהלך הפנייה")
     if re.search(r"(?:שאני|שהתובע).{0,15}(?:שבר|אשם|גרם)", text):
         outcome_parts.append("הנתבע/ת טען/ה כי התובע/ת אחראי/ת לנזק")
     if not outcome_parts:

@@ -31,6 +31,7 @@ from small_claims_agent.interview import (
     correction_command,
     inferred_completed_fields,
     is_recall_request,
+    merge_damage_confirmation,
     merge_partial_answer,
     next_interview_field,
     normalize_opening_keyboard_layout,
@@ -41,7 +42,7 @@ from small_claims_agent.interview import (
     seed_case_from_opening,
 )
 from small_claims_agent.legal import classify_category, retrieve_authorities_for_case
-from small_claims_agent.llm import DemoAgentClient, GeminiAgentClient, ModelUnavailable
+from small_claims_agent.llm import DemoAgentClient, LLMGateway, ModelUnavailable
 from small_claims_agent.models import CaseData, ClaimCategory, DamageItem, EvidenceItem, Party, RemedyType
 from small_claims_agent.pdf_export import markdown_to_pdf_bytes
 from small_claims_agent.privacy import redact_text, safe_case_context
@@ -144,7 +145,7 @@ class SmokeRunner:
             "",
             f"- Generated: {metadata['generated_at']}",
             f"- Python: `{metadata['python']}`",
-            f"- Gemini configured: `{metadata['gemini_configured']}`",
+            f"- LLM provider configured: `{metadata['llm_provider_configured']}`",
             f"- Total checks: **{total}**",
             f"- Passed: **{passed}**",
             f"- Failed: **{failed}**",
@@ -526,6 +527,28 @@ def run_contact_attempts(runner: SmokeRunner) -> None:
             message,
             lambda answer=answer: apply_chat_answer(CaseData(), "prior_attempts", answer),
         )
+    voucher_case = CaseData(product_or_service_details="מקרר")
+    voucher_attempt = "הלכתי לחנות והם הסכימו רק לתת לי שובר על 200 שקל ולא לתקן או להחליף"
+    runner.check(
+        "Contact attempts",
+        "C15",
+        "Walk-in contact with a partial voucher offer is accepted",
+        "one resolution attempt",
+        lambda: apply_chat_answer(voucher_case, "prior_attempts", voucher_attempt).prior_attempts,
+        lambda value: value == [voucher_attempt],
+    )
+    opening_with_attempt = seed_case_from_opening(
+        "קניתי מקרר ב4000 שקל והוא התקלקל אחרי יומיים. הלכתי לחנות והם "
+        "הסכימו רק לתת לי שובר על 200 שקל ולא לתקן או להחליף"
+    )
+    runner.check(
+        "Contact attempts",
+        "C16",
+        "Opening contact with a partial remedy can be reused",
+        "attempt extracted and reused",
+        lambda: apply_chat_answer(opening_with_attempt, "prior_attempts", "השתמש במה שכתבתי").prior_attempts,
+        lambda value: len(value) == 1 and "שובר" in value[0] and "הלכתי" in value[0],
+    )
     case = CaseData(product_or_service_details="מזגן")
     combined = merge_partial_answer("התקשרתי", "אמרו שלא מחזירים")
     runner.check(
@@ -572,17 +595,19 @@ def run_damages_remedies_evidence(runner: SmokeRunner) -> None:
     runner.expected_error(
         "Damages, remedies, evidence",
         "M04",
-        "Large non-pecuniary amount requires confirmation",
-        "בוודאות",
+        "Large non-pecuniary amount pauses for explicit confirmation",
+        "כתבו ״כן״ או ״לא״",
         lambda: parse_damage_items("מחיר מוצר 3200 עוגמת נפש 4000", Decimal("3200")),
     )
     runner.check(
         "Damages, remedies, evidence",
         "M05",
-        "Confirmed non-pecuniary amount accepted",
+        "Natural yes confirms prior non-pecuniary itemization",
         "total 7200",
-        lambda: str(sum((item.amount for item in parse_damage_items("מחיר מוצר 3200 עוגמת נפש 4000 בוודאות", Decimal("3200"))), Decimal("0"))),
-        lambda value: value == "7200",
+        lambda: merge_damage_confirmation(["מחיר מוצר 3200 עוגמת נפש 4000"], "כן"),
+        lambda value: bool(value)
+        and sum((item.amount for item in parse_damage_items(value, Decimal("3200"))), Decimal("0"))
+        == Decimal("7200"),
     )
     duplicate = seed_case_from_opening("בעל מסעדה חייב אותי פעמים בסכום כולל של 20 אלף וקיבלתי שירות מזלזל")
     runner.check(
@@ -973,18 +998,18 @@ def run_streamlit(runner: SmokeRunner) -> None:
         )
 
 
-def run_live_gemini(runner: SmokeRunner) -> None:
+def run_live_gateway(runner: SmokeRunner) -> None:
     load_dotenv(ROOT / ".env")
-    client = GeminiAgentClient(max_retries=1)
+    client = LLMGateway()
     if not client.available:
         runner.results.append(
-            Result("Live Gemini", "A00", "Gemini configuration", "SKIP", "configured", "GEMINI_API_KEY unavailable", 0)
+            Result("Live LLM gateway", "A00", "Provider configuration", "SKIP", "at least one provider configured", "no provider key available", 0)
         )
         return
     opening = "שילמתי 20000 שקל על קורס ללימודים בהייטק וביקשתי לבטל אחרי יומיים אך סירבו"
     base_case = seed_case_from_opening(opening)
     runner.check(
-        "Live Gemini",
+        "Live LLM gateway",
         "A01",
         "Structured extraction returns schema-valid output",
         "StateExtraction",
@@ -992,7 +1017,7 @@ def run_live_gemini(runner: SmokeRunner) -> None:
         lambda value: value is not None and hasattr(value, "updates"),
     )
     runner.check(
-        "Live Gemini",
+        "Live LLM gateway",
         "A02",
         "Repair call returns schema-valid action without inventing amount",
         "accept or clarify; no invented amount",
@@ -1006,7 +1031,7 @@ def run_live_gemini(runner: SmokeRunner) -> None:
     )
     complete = _complete_case("restaurant")
     runner.check(
-        "Live Gemini",
+        "Live LLM gateway",
         "A03",
         "Consistency judge returns schema-valid verdict",
         "pass or clarify",
@@ -1015,7 +1040,7 @@ def run_live_gemini(runner: SmokeRunner) -> None:
     )
     records = retrieve_authorities_for_case(complete)
     sections = runner.check(
-        "Live Gemini",
+        "Live LLM gateway",
         "A04",
         "Draft sections return structured Hebrew content",
         "non-empty factual background",
@@ -1028,7 +1053,7 @@ def run_live_gemini(runner: SmokeRunner) -> None:
         ).cause_of_action
         markdown = compose_claim_markdown(complete, sections, records)
         runner.check(
-            "Live Gemini",
+            "Live LLM gateway",
             "A05",
             "Live narrative preserves explicit 10000 claim total",
             "10,000 ₪ and not 20,000 as claim total",
@@ -1071,11 +1096,11 @@ def main() -> int:
     run_preview_corrections_privacy(runner)
     run_validation_legal_drafts_pdfs(runner)
     run_streamlit(runner)
-    run_live_gemini(runner)
+    run_live_gateway(runner)
     metadata = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "python": sys.version.split()[0],
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+        "llm_provider_configured": any(os.getenv(name) for name in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY")),
     }
     runner.write(metadata)
     passed = sum(item.status == "PASS" for item in runner.results)

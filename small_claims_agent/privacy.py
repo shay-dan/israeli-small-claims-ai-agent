@@ -35,7 +35,7 @@ _ADDRESS_PATTERN = re.compile(
 
 
 def free_text_privacy_findings(text: str) -> list[str]:
-    """Detect likely personal identifiers before an opening is sent to Gemini.
+    """Detect likely personal identifiers before an opening is sent to any LLM provider.
 
     This deliberately favors a short, explainable deny-list. It does not try to
     identify every Hebrew person name because doing so would also block ordinary

@@ -13,20 +13,20 @@ if str(ROOT) not in sys.path:
 
 from small_claims_agent.graph import build_graph, initial_state
 from small_claims_agent.interview import question_for
-from small_claims_agent.llm import GeminiAgentClient
+from small_claims_agent.llm import LLMGateway
 from small_claims_agent.models import CaseData
 from small_claims_agent.sample_data import air_conditioner_sample
 
 
 def main() -> None:
     load_dotenv(ROOT / ".env")
-    client = GeminiAgentClient()
+    client = LLMGateway()
     report: dict[str, object] = {
         "available": client.available,
-        "model": client.model_name,
+        "provider_chain": client.model_name,
     }
     if not client.available:
-        report["status"] = "skipped_missing_api_key"
+        report["status"] = "skipped_missing_provider_keys"
         print(json.dumps(report, ensure_ascii=True))
         return
 
@@ -43,7 +43,7 @@ def main() -> None:
     state["generate_requested"] = True
     graph_result = build_graph(client).invoke(
         state,
-        {"configurable": {"thread_id": "live-gemini-deep-smoke"}},
+        {"configurable": {"thread_id": "live-llm-gateway-deep-smoke"}},
     )
     report["draft_graph"] = {
         "valid": not graph_result.get("validation_errors"),
@@ -54,6 +54,17 @@ def main() -> None:
         "model_status": graph_result.get("model_status", ""),
         "review": graph_result.get("draft_review", {}),
         "warning_messages": graph_result.get("warnings", []),
+    }
+
+    clarification = client.review_draft_for_clarification(
+        case,
+        graph_result["draft_markdown"],
+        {item["id"] for item in graph_result.get("authorities", []) if item.get("id")},
+    )
+    report["draft_clarification_review"] = {
+        "provider": client.last_provider,
+        "model": client.last_model,
+        "provider_issue_count": len(clarification.issues),
     }
 
     repair = client.repair_answer(
@@ -68,6 +79,8 @@ def main() -> None:
         "has_repaired_answer": bool(repair.repaired_answer),
         "has_clarification": bool(repair.clarification_question),
     }
+    report["provider_used"] = client.last_provider
+    report["model_used"] = client.last_model
     report["status"] = "passed"
     print(json.dumps(report, ensure_ascii=True))
 

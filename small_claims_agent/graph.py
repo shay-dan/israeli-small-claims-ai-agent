@@ -5,11 +5,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .drafting import compose_claim_markdown
+from .drafting import compose_claim_markdown, formalize_resolution_attempt
 from .legal import classify_category, retrieve_authorities_for_case
-from .llm import DemoAgentClient, GeminiAgentClient, ModelUnavailable, controlled_cause_paragraphs
-from .models import CaseData, ClaimCategory, ClaimGraphState, DraftReview, DraftSections
-from .validators import select_questions, validate_case, validate_draft
+from .llm import DemoAgentClient, LLMGateway, ModelUnavailable, controlled_cause_paragraphs
+from .models import AuthorityRecord, CaseData, ClaimCategory, ClaimGraphState, DraftReview, DraftSections
+from .validators import draft_cross_field_warnings, select_questions, validate_case, validate_draft
 
 
 ALLOWED_UPDATE_ROOTS = {
@@ -32,7 +32,7 @@ ALLOWED_UPDATE_ROOTS = {
 
 
 def _ensure_verified_factual_anchors(sections: DraftSections, case: CaseData) -> DraftSections:
-    """Add any verified date/place that Gemini shortened or omitted."""
+    """Add any verified date/place that a provider shortened or omitted."""
     factual_text = "\n".join(sections.factual_background)
     anchors: list[str] = []
     if case.transaction_date and case.transaction_date not in factual_text:
@@ -47,7 +47,7 @@ def _ensure_verified_factual_anchors(sections: DraftSections, case: CaseData) ->
 
 
 def _restore_verified_privacy_placeholders(sections: DraftSections, case: CaseData) -> DraftSections:
-    """Restore only state-backed values after Gemini worked on the redacted case."""
+    """Restore only state-backed values after a provider worked on redacted case data."""
     replacements = {
         "[PLAINTIFF_NAME]": case.claimant.full_name,
         "[PLAINTIFF_ID]": case.claimant.identifier,
@@ -127,12 +127,15 @@ def _sanitize_draft_review(
         clarity_issues=[item for item in review.clarity_issues if supported(item)],
         revision_instructions=[item for item in review.revision_instructions if supported(item)],
     )
-    if not (
+    has_findings = bool(
         cleaned.factual_consistency_issues
         or cleaned.unsupported_assertions
         or cleaned.clarity_issues
         or cleaned.revision_instructions
-    ):
+    )
+    if has_findings:
+        cleaned.verdict = "revise"
+    else:
         cleaned.verdict = "pass"
     return cleaned
 
@@ -152,7 +155,7 @@ def _merge_updates(case: CaseData, updates: list[dict[str, Any]]) -> CaseData:
         candidate = deepcopy(data)
         candidate[root] = value
         try:
-            # Accept each update independently. One malformed Gemini field must
+            # Accept each update independently. One malformed provider field must
             # not discard valid fields or terminate the interview.
             CaseData.model_validate(candidate)
         except (ValidationError, TypeError, ValueError):
@@ -206,14 +209,22 @@ def _normalize_model_value(root: str, value: Any) -> Any:
     return value
 
 
-def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
+def _gateway_attempt_diagnostics(client: Any, operation: str) -> list[dict[str, Any]]:
+    """Expose only safe provider/model/error metadata from failed attempts."""
+    return [
+        {**attempt, "operation": operation}
+        for attempt in getattr(client, "last_attempts", [])
+    ]
+
+
+def build_graph(client: LLMGateway | DemoAgentClient | None = None):
     try:
         from langgraph.checkpoint.memory import InMemorySaver
         from langgraph.graph import END, START, StateGraph
     except ImportError as exc:
         raise RuntimeError("LangGraph is not installed. Run pip install -r requirements.txt") from exc
 
-    client = client or GeminiAgentClient()
+    client = client or LLMGateway()
 
     def extract_node(state: ClaimGraphState) -> dict:
         case = CaseData.model_validate(state.get("case") or {})
@@ -231,6 +242,7 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
                 "questions": extraction.candidate_question_topics,
                 "model_status": getattr(client, "model_name", "unknown"),
                 "manual_mode": isinstance(client, DemoAgentClient),
+                "model_diagnostics": _gateway_attempt_diagnostics(client, "extract"),
             }
         except ModelUnavailable as exc:
             fallback = DemoAgentClient()
@@ -240,8 +252,10 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
             return {
                 "case": case.model_dump(mode="json"),
                 "model_status": str(exc),
+                "model_diagnostic": exc.diagnostic,
+                "model_diagnostics": [exc.diagnostic] if exc.diagnostic else [],
                 "manual_mode": True,
-                "warnings": ["Gemini אינו זמין; הנתונים נשמרו והמערכת עברה למצב ידני."],
+                "warnings": ["ספקי ה־LLM אינם זמינים; הנתונים נשמרו והמערכת עברה למצב מקומי."],
             }
 
     def validate_node(state: ClaimGraphState) -> dict:
@@ -276,18 +290,23 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
         case = CaseData.model_validate(state["case"])
         authorities = state.get("authorities", [])
         active_client = client
+        diagnostics = list(state.get("model_diagnostics", []))
         try:
             sections = active_client.draft_sections(case, authorities)
             status = getattr(active_client, "model_name", "unknown")
+            diagnostics.extend(_gateway_attempt_diagnostics(active_client, "draft_sections"))
         except Exception as exc:
             sections = DemoAgentClient().draft_sections(case, authorities)
-            status = f"local draft fallback: {type(exc).__name__}"
+            diagnostic = getattr(exc, "diagnostic", {})
+            if diagnostic:
+                diagnostics.append(diagnostic)
+            status = f"local draft fallback: {diagnostic.get('category', type(exc).__name__)}"
         sections = _restore_verified_privacy_placeholders(sections, case)
         sections = _ensure_verified_factual_anchors(sections, case)
         from .models import AuthorityRecord
 
         records = [AuthorityRecord.model_validate(item) for item in authorities]
-        # Legal conclusions are deterministic and authority-bound even when Gemini
+        # Legal conclusions are deterministic and authority-bound even when the LLM
         # supplies the narrative prose.
         sections.cause_of_action = controlled_cause_paragraphs(authorities, case)
         markdown = compose_claim_markdown(case, sections, records)
@@ -295,6 +314,7 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
             "draft_sections": sections.model_dump(mode="json"),
             "draft_markdown": markdown,
             "model_status": status,
+            "model_diagnostics": diagnostics,
         }
 
     def draft_check_node(state: ClaimGraphState) -> dict:
@@ -302,7 +322,13 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
         case = CaseData.model_validate(state.get("case") or {})
         issues = validate_draft(state.get("draft_markdown", ""), allowed, case)
         if not issues:
-            return {"validation_errors": []}
+            return {
+                "validation_errors": [],
+                "warnings": list(dict.fromkeys(
+                    state.get("warnings", [])
+                    + draft_cross_field_warnings(state.get("draft_markdown", ""), case)
+                )),
+            }
 
         # A malformed model narrative must not strand the user after a complete
         # interview. Recompose once with the deterministic local drafter.
@@ -323,7 +349,7 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
             "warnings": list(
                 dict.fromkeys(
                     state.get("warnings", [])
-                    + ["טיוטת Gemini לא עברה את הבדיקה המקומית, ולכן נוצרה טיוטה מקומית תקינה."]
+                    + ["טיוטת המודל לא עברה את הבדיקה המקומית, ולכן נוצרה טיוטה מקומית תקינה."]
                 )
             ),
         }
@@ -334,21 +360,80 @@ def build_graph(client: GeminiAgentClient | DemoAgentClient | None = None):
     def review_node(state: ClaimGraphState) -> dict:
         case = CaseData.model_validate(state["case"])
         allowed = {item["id"] for item in state.get("authorities", [])}
+        authorities = state.get("authorities", [])
+        diagnostics = list(state.get("model_diagnostics", []))
+        warnings = list(state.get("warnings", []))
         try:
             review = client.review(case, state["draft_markdown"], allowed)
-        except Exception:
+            diagnostics.extend(_gateway_attempt_diagnostics(client, "review"))
+        except Exception as exc:
             review = DemoAgentClient().review(case, state["draft_markdown"], allowed)
+            diagnostic = getattr(exc, "diagnostic", {})
+            if diagnostic:
+                diagnostics.append(diagnostic)
         review = _sanitize_draft_review(review, case, allowed)
-        # The MVP records reviewer feedback but never lets it overwrite facts.
         if review.verdict == "revise" and state.get("revision_count", 0) < 1:
+            reviser = getattr(client, "revise_sections", None)
+            if reviser:
+                try:
+                    sections = reviser(case, authorities, state["draft_markdown"], review)
+                    sections = _restore_verified_privacy_placeholders(sections, case)
+                    sections = _ensure_verified_factual_anchors(sections, case)
+                    sections.resolution_attempts = [
+                        formalize_resolution_attempt(attempt, case)
+                        for attempt in case.prior_attempts
+                    ] or ["לא נמסרו ניסיונות יישוב קודמים."]
+                    # Statutory and party-specific content is never delegated to
+                    # the revision call; rebuild it from the locally verified data.
+                    sections.cause_of_action = controlled_cause_paragraphs(authorities, case)
+                    records = [AuthorityRecord.model_validate(item) for item in authorities]
+                    revised_markdown = compose_claim_markdown(case, sections, records)
+                    revision_issues = validate_draft(revised_markdown, allowed, case)
+                    if not revision_issues:
+                        # A second full-draft review verifies the single proposed
+                        # revision. We do not loop or accept edits that fail local QA.
+                        try:
+                            verification = client.review(case, revised_markdown, allowed)
+                            diagnostics.extend(_gateway_attempt_diagnostics(client, "review_revision"))
+                            review = _sanitize_draft_review(verification, case, allowed)
+                        except Exception as exc:
+                            diagnostic = getattr(exc, "diagnostic", {})
+                            if diagnostic:
+                                diagnostics.append(diagnostic)
+                            warnings.append(
+                                "הטיוטה תוקנה ונבדקה מקומית; בדיקת ה־LLM החוזרת לא הייתה זמינה."
+                            )
+                        warnings.append(
+                            "בקרת האיכות הציעה תיקון. נוסח הטיוטה עודכן ונבדק מול הנתונים המאומתים."
+                        )
+                        return {
+                            "draft_sections": sections.model_dump(mode="json"),
+                            "draft_markdown": revised_markdown,
+                            "draft_review": review.model_dump(mode="json"),
+                            "model_diagnostics": diagnostics,
+                            "revision_count": 1,
+                            "warnings": list(dict.fromkeys(warnings)),
+                        }
+                    warnings.append(
+                        "הצעת תיקון ה־LLM לא עברה את הבדיקות המקומיות, ולכן נשמרה הטיוטה המקורית. "
+                        + " ".join(revision_issues[:3])
+                    )
+                except Exception as exc:
+                    diagnostic = getattr(exc, "diagnostic", {})
+                    if diagnostic:
+                        diagnostics.append(diagnostic)
+                    warnings.append(
+                        "הטיוטה לא שונתה אוטומטית: הצעת התיקון לא הייתה זמינה או לא עברה אימות."
+                    )
             return {
                 "draft_review": review.model_dump(mode="json"),
+                "model_diagnostics": diagnostics,
                 "revision_count": 1,
-                "warnings": list(dict.fromkeys(state.get("warnings", []) + [
-                    "בקרת האיכות הציעה תיקון; ההערות מוצגות למשתמש ולא משנות עובדות אוטומטית."
+                "warnings": list(dict.fromkeys(warnings + [
+                    "בקרת האיכות מצאה נקודות לבדיקה; הטיוטה המקורית נשמרה כי לא התקבל תיקון מאומת."
                 ])),
             }
-        return {"draft_review": review.model_dump(mode="json")}
+        return {"draft_review": review.model_dump(mode="json"), "model_diagnostics": diagnostics}
 
     builder = StateGraph(ClaimGraphState)
     builder.add_node("extract", extract_node)
@@ -378,6 +463,7 @@ def initial_state(case: CaseData | None = None) -> ClaimGraphState:
         "generate_requested": False,
         "manual_mode": False,
         "model_status": "idle",
+        "model_diagnostics": [],
         "missing_fields": [],
         "validation_errors": [],
         "warnings": [],

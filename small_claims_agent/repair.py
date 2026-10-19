@@ -70,6 +70,7 @@ class RepairOutcome:
     assessment: AnswerAssessment | None = None
     repaired_answer: str = ""
     clarification_question: str = ""
+    diagnostic: dict[str, Any] | None = None
 
 
 def attempt_llm_repair(
@@ -83,8 +84,8 @@ def attempt_llm_repair(
         return None
     try:
         proposal = client.repair_answer(field, question, failed_answers[-2:], case)
-    except ModelUnavailable:
-        return None
+    except ModelUnavailable as exc:
+        return RepairOutcome(accepted=False, diagnostic=exc.diagnostic)
 
     if proposal.action == "accept" and proposal.confidence >= 0.7 and proposal.repaired_answer.strip():
         try:

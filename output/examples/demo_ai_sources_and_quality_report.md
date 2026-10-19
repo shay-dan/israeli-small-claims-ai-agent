@@ -8,7 +8,7 @@
 - **מוצר או שירות:** מזגן ביתי מדגם Demo-3200
 - **סכום תביעה:** 4,050 ₪
 - **סעד עיקרי:** cancellation
-- **מצב יצירת הטיוטה:** deterministic-demo (no Gemini call)
+- **מצב יצירת הטיוטה:** deterministic-demo (no hosted LLM call)
 
 ## שיטת האחזור
 

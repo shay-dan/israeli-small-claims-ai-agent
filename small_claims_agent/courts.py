@@ -13,11 +13,19 @@ class JurisdictionResolution:
     locality: str
 
 
+@dataclass(frozen=True)
+class ParsedAddress:
+    street: str = ""
+    house_number: str = ""
+    locality: str = ""
+
+
 # Curated MVP lookup. A locality not listed here is never guessed: the interview
 # asks for a clearer locality and the draft remains blocked.
 LOCALITY_TO_COURT = {
     "תל אביב-יפו": "תל אביב-יפו",
     "תל אביב": "תל אביב-יפו",
+    "חולון": "תל אביב-יפו",
     "רמת גן": "תל אביב-יפו",
     "גבעתיים": "תל אביב-יפו",
     "ירושלים": "ירושלים",
@@ -105,18 +113,68 @@ def is_remote_transaction_place(text: str) -> bool:
     return is_online_transaction_place(text) or is_telephone_transaction_place(text)
 
 
-def locality_from_text(text: str) -> str:
+def _locality_match(text: str) -> tuple[str, int, int] | None:
     normalized = " ".join(text.replace("–", "-").split())
-    # Prefer the longest key so "תל אביב-יפו" wins over "תל אביב".
-    for locality in sorted(LOCALITY_TO_COURT, key=len, reverse=True):
-        if locality in normalized:
-            return locality
-    return ""
+    # Match whole locality names, not substrings (e.g. אילת inside a street
+    # name), then prefer the last locality in a conventional street/city
+    # address. Longest match breaks ties such as תל אביב / תל אביב-יפו.
+    matches: list[tuple[int, int, str]] = []
+    for locality in LOCALITY_TO_COURT:
+        pattern = rf"(?<![א-ת])(?:[בלמכוה])?{re.escape(locality)}(?![א-ת])"
+        for match in re.finditer(pattern, normalized):
+            matches.append((match.start(), len(locality), locality))
+    if not matches:
+        return None
+    last_position = max(start for start, _, _ in matches)
+    start, _, locality = max(
+        (item for item in matches if item[0] == last_position),
+        key=lambda item: item[1],
+    )
+    pattern = rf"(?<![א-ת])(?:[בלמכוה])?{re.escape(locality)}(?![א-ת])"
+    match = next(match for match in re.finditer(pattern, normalized) if match.start() == start)
+    return locality, match.start(), match.end()
+
+
+def locality_from_text(text: str) -> str:
+    match = _locality_match(text)
+    return match[0] if match else ""
+
+
+def parse_address(text: str) -> ParsedAddress:
+    """Parse common Israeli street/number/city formats without altering source text."""
+    normalized = " ".join(text.replace("–", "-").split()).strip(" ,.-")
+    city_match = _locality_match(normalized)
+    locality = city_match[0] if city_match else ""
+    without_city = normalized
+    if city_match:
+        _, start, end = city_match
+        without_city = (normalized[:start] + " " + normalized[end:]).strip(" ,.-")
+
+    number_match = re.search(r"(?<!\d)(\d{1,5}[א-ת]?)(?!\d)", without_city)
+    if not number_match:
+        return ParsedAddress(locality=locality)
+    before_number = without_city[:number_match.start()].strip(" ,.-")
+    # In combined business/address strings, use the text after the last street
+    # designator so the business name does not leak into the parsed street.
+    designator = list(re.finditer(r"(?:רחוב|שדרות|שד[׳']?|דרך)\s+", before_number))
+    if designator:
+        before_number = before_number[designator[-1].end():]
+    else:
+        before_number = re.sub(
+            r"^(?:חנות|בית העסק|החברה|חברת|סניף)\s+",
+            "",
+            before_number,
+        )
+    return ParsedAddress(
+        street=before_number.strip(" ,.-"),
+        house_number=number_match.group(1),
+        locality=locality,
+    )
 
 
 def resolve_jurisdiction(case: CaseData) -> JurisdictionResolution | None:
-    transaction_locality = locality_from_text(case.incident_place)
-    defendant_locality = locality_from_text(case.defendant.address)
+    transaction_locality = parse_address(case.incident_place).locality
+    defendant_locality = parse_address(case.defendant.address).locality
     locality = transaction_locality or defendant_locality
     if not locality:
         return None

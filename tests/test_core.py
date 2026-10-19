@@ -1,8 +1,11 @@
 from decimal import Decimal
 
+import pytest
+
 from small_claims_agent.drafting import (
     compose_claim_markdown,
     compose_source_report_markdown,
+    formal_case_description,
     formalize_resolution_attempt,
 )
 from small_claims_agent.graph import _merge_updates, _sanitize_draft_review, build_graph, initial_state
@@ -14,6 +17,7 @@ from small_claims_agent.interview import (
     build_live_draft_preview,
     build_repeated_failure_guidance,
     correction_command,
+    damage_confirmation_intent,
     extract_prior_attempt_from_opening,
     extract_purchased_subject,
     field_value_for_user,
@@ -29,12 +33,24 @@ from small_claims_agent.interview import (
     opening_story_is_complete,
     opening_story_missing_parts,
     parse_damage_items,
+    defendant_name_reference_candidate,
+    merge_incident_place_answer,
+    prior_attempt_has_method,
+    prior_attempt_has_outcome,
     prior_attempt_fragment_is_relevant,
     question_for,
     seed_case_from_opening,
 )
 from small_claims_agent.legal import classify_category, retrieve_authorities, retrieve_authorities_for_case
-from small_claims_agent.llm import DemoAgentClient, controlled_cause_paragraphs
+from small_claims_agent.courts import locality_from_text, parse_address, resolve_jurisdiction
+from small_claims_agent.llm import (
+    DemoAgentClient,
+    DraftClarificationIssue,
+    DraftClarificationReview,
+    GeminiAgentClient,
+    _provider_error_diagnostic,
+    controlled_cause_paragraphs,
+)
 from small_claims_agent.models import (
     AnswerRepair,
     CaseData,
@@ -46,12 +62,20 @@ from small_claims_agent.models import (
     InterviewConsistencyReview,
     RemedyType,
     StateExtraction,
+    DraftSections,
 )
 from small_claims_agent.privacy import free_text_privacy_findings, redact_text, safe_case_context
 from small_claims_agent.pdf_export import markdown_to_pdf_bytes
 from small_claims_agent.sample_data import air_conditioner_sample
 from small_claims_agent.repair import attempt_llm_repair, consistency_issue_is_supported
-from small_claims_agent.validators import calculate_filing_fee, select_questions, validate_case, validate_draft
+from small_claims_agent.draft_clarification import sanitize_draft_clarifications
+from small_claims_agent.validators import (
+    calculate_filing_fee,
+    draft_cross_field_warnings,
+    select_questions,
+    validate_case,
+    validate_draft,
+)
 
 
 def test_sample_is_ready_and_fee_is_separate():
@@ -60,6 +84,65 @@ def test_sample_is_ready_and_fee_is_separate():
     assert result.ready
     assert result.claim_total == Decimal("4050")
     assert result.filing_fee == Decimal("50")
+
+
+def test_draft_clarification_keeps_only_questions_anchored_in_both_sources():
+    case = CaseData(
+        event_summary="קניתי מזגן והוא התקלקל אחרי שבוע.",
+        product_or_service_details="מזגן",
+    )
+    draft = "הרקע העובדתי\nהתובע רכש מזגן. כעבור שבוע המוצר הפסיק לפעול."
+    review = DraftClarificationReview(
+        issues=[
+            DraftClarificationIssue(
+                field="event_summary",
+                case_excerpt="התקלקל אחרי שבוע",
+                draft_excerpt="כעבור שבוע המוצר הפסיק לפעול",
+                clarification_question="האם שתי הגרסאות מתארות את אותו אירוע?",
+            ),
+            DraftClarificationIssue(
+                field="event_summary",
+                case_excerpt="התקלקל אחרי שבוע",
+                draft_excerpt="הנתבע הודה באחריות",
+                clarification_question="האם זו עובדה נכונה?",
+            ),
+            DraftClarificationIssue(
+                field="claimant.full_name",
+                case_excerpt="שם התובע",
+                draft_excerpt="שם אחר",
+                clarification_question="האם השם נכון?",
+            ),
+        ]
+    )
+
+    accepted = sanitize_draft_clarifications(review, case, draft)
+
+    assert len(accepted) == 1
+    assert accepted[0]["field"] == "event_summary"
+    assert accepted[0]["case_excerpt"] == "התקלקל אחרי שבוע"
+
+
+def test_draft_clarification_review_prompt_redacts_party_pii():
+    case = CaseData(
+        event_summary="קניתי מזגן והוא התקלקל אחרי שבוע.",
+        claimant={"full_name": "ישראל ישראלי", "phone": "0541234567", "address": "רחוב הדוגמה 1"},
+        defendant={"full_name": "עסק לדוגמה בע״מ", "address": "רחוב העסק 2"},
+    )
+    client = GeminiAgentClient(api_key="test-only")
+    captured = {}
+
+    def fake_structured_call(prompt, schema):
+        captured["prompt"] = prompt
+        captured["schema"] = schema
+        return DraftClarificationReview()
+
+    client._structured_call = fake_structured_call
+    client.review_draft_for_clarification(case, "פרטי הצדדים: ישראל ישראלי, רחוב הדוגמה 1", set())
+
+    assert "ישראל ישראלי" not in captured["prompt"]
+    assert "0541234567" not in captured["prompt"]
+    assert "רחוב הדוגמה 1" not in captured["prompt"]
+    assert "[PLAINTIFF_NAME]" in captured["prompt"]
 
 
 def test_limit_uses_all_monetary_components():
@@ -289,6 +372,21 @@ def test_complete_opening_with_stopped_working_advances_immediately():
     assert next_interview_field(case, inferred_completed_fields(case)) == "transaction_date"
 
 
+def test_opening_accepts_engine_failure_and_hebrew_hundred_thousand_amount():
+    opening = "קניתי אוטו חדש ונפל לו המנוע אחרי יומיים נסיעה"
+    assert extract_purchased_subject(opening) == "אוטו חדש"
+    assert opening_story_missing_parts(opening) == ["כמה שילמתם"]
+
+    completed = merge_partial_answer(
+        opening,
+        "המנוע נפל. המחיר מאה אלף שקל",
+    )
+    assert opening_story_missing_parts(completed) == []
+    case = seed_case_from_opening(completed)
+    assert case.product_or_service_details == "אוטו חדש"
+    assert case.claim_total == Decimal("100000")
+
+
 def test_complete_laptop_opening_with_adjectival_damage_advances_immediately():
     text = (
         "קניתי לפטופ ב4000 שקל, פתחתי את הקופסה מהחנות וראיתי שהמסך של "
@@ -500,12 +598,17 @@ def test_streamlit_recovers_from_repeated_invalid_answer_without_accepting_it(mo
     assert not app.exception
     assert app.session_state["case"].transaction_date == ""
     assert app.session_state["failure_counts"]["transaction_date"] == 4
-    assert "נתקענו בשאלה" in app.session_state["messages"][-1]["content"]
-    assert "אפס את השאלה" in app.session_state["messages"][-1]["content"]
+    assert "נתקענו בשאלה" not in app.session_state["messages"][-1]["content"]
 
     app.chat_input[0].set_value("מה חסר?").run()
     assert app.session_state["failure_counts"]["transaction_date"] == 4
     assert "תאריך עסקה אמיתי" in app.session_state["messages"][-1]["content"]
+
+    for _ in range(2):
+        app.chat_input[0].set_value("בתחילת ינואר").run()
+    assert app.session_state["failure_counts"]["transaction_date"] == 6
+    assert "נתקענו בשאלה" in app.session_state["messages"][-1]["content"]
+    assert app.session_state["failure_guidance_shown"] == {"transaction_date"}
 
     app.chat_input[0].set_value("אפס את השאלה").run()
     assert "transaction_date" not in app.session_state["failure_counts"]
@@ -516,6 +619,47 @@ def test_streamlit_recovers_from_repeated_invalid_answer_without_accepting_it(mo
     app.chat_input[0].set_value("1.1.26").run()
     assert app.session_state["case"].transaction_date == "01.01.2026"
     assert app.session_state["awaiting_field"] == "incident_date"
+
+
+def test_prior_attempts_calls_llm_after_two_irrelevant_answers(monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    calls = []
+
+    class RepairClient:
+        available = True
+
+        def repair_answer(self, field, question, failed_answers, case):
+            calls.append((field, list(failed_answers)))
+            return AnswerRepair(
+                action="clarify",
+                clarification_question="האם התקשרתם, הגעתם לעסק או פניתם בדרך אחרת, ומה ענו לכם?",
+                confidence=0,
+            )
+
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
+    app.session_state["case"] = CaseData(
+        event_summary="קניתי מזגן ב3200 שקל והוא התקלקל אחרי שבוע",
+        product_or_service_details="מזגן",
+    )
+    app.session_state["started"] = True
+    app.session_state["awaiting_field"] = "prior_attempts"
+    app.session_state["client"] = RepairClient()
+    app.run()
+
+    app.chat_input[0].set_value("הם הפסידו במשחק").run()
+    assert calls == []
+    app.chat_input[0].set_value("זה בכלל לא קשור").run()
+
+    assert calls == [("prior_attempts", ["הם הפסידו במשחק", "זה בכלל לא קשור"])]
+    assert app.session_state["case"].prior_attempts == []
+    assert "מה ענו לכם" in app.session_state["messages"][-1]["content"]
+    assert "נתקענו בשאלה" not in app.session_state["messages"][-1]["content"]
 
 
 def test_streamlit_accumulates_opening_fragments_without_getting_stuck(monkeypatch):
@@ -576,11 +720,16 @@ def test_streamlit_accepts_complete_course_cancellation_opening(monkeypatch):
 
     recall_button = next(button for button in app.button if button.label == "📄 הצגת טיוטת הביניים")
     recall_button.click().run()
-    preview = app.session_state["messages"][-1]["content"]
+    preview = app.session_state["messages"][-2]["content"]
     assert "טיוטת ביניים" in preview
     assert "קורס ללימודים בהייטק" in preview
     assert "20,000 ₪" in preview
     assert "⬜ [טרם מולא]" in preview
+    assert "מה תאריך העסקה המדויק" in app.session_state["messages"][-1]["content"]
+    assert any(
+        "להמשך הראיון" in info.value and "מה תאריך העסקה המדויק" in info.value
+        for info in app.info
+    )
 
 
 def test_chat_interview_completes_without_a_form():
@@ -728,21 +877,67 @@ def test_natural_phone_attempt_is_accepted_without_forcing_a_date():
 
 
 def test_prior_location_can_supply_referenced_business_name_and_address():
+    from small_claims_agent.interview import defendant_name_reference_candidate
+
     case = apply_chat_answer(
         CaseData(), "incident_place", "תל אביב רחוב הארבעה 1 מחסני הזבלה"
     )
-    case = apply_chat_answer(case, "defendant.full_name", "כתבתי")
+    assert defendant_name_reference_candidate("כתבתי", case) == "מחסני הזבלה"
+    try:
+        apply_chat_answer(case, "defendant.full_name", "כתבתי")
+        assert False, "a place-derived name must be confirmed, not silently applied"
+    except InterviewAnswerError as exc:
+        assert "זיהיתי שם אפשרי" in str(exc)
+    case = apply_chat_answer(case, "defendant.full_name", "מחסני הזבלה")
     case = apply_chat_answer(case, "defendant.address", "כתבתי")
     assert case.defendant.full_name == "מחסני הזבלה"
     assert case.defendant.address == "תל אביב רחוב הארבעה 1"
     assert "כתבתי" not in case.model_dump_json()
 
 
+def test_comma_separated_business_address_and_unmapped_locality_are_parsed_separately():
+    from small_claims_agent.interview import defendant_name_reference_candidate
+
+    place = "בלוני שמוליק, הקרן 89, מעלה מכמש"
+    case = apply_chat_answer(CaseData(), "incident_place", place)
+    assert case.incident_place == place
+    assert defendant_name_reference_candidate("כתבתי", case) == "בלוני שמוליק"
+
+    case = apply_chat_answer(case, "defendant.full_name", "בלוני שמוליק")
+    case = apply_chat_answer(case, "defendant.address", "אותה כתובת")
+    assert case.defendant.full_name == "בלוני שמוליק"
+    assert case.defendant.address == "הקרן 89, מעלה מכמש"
+
+    explicitly_labeled = apply_chat_answer(
+        CaseData(), "incident_place", "רחוב הקרן 89. ישוב מעלה מכמש"
+    )
+    assert explicitly_labeled.incident_place == "רחוב הקרן 89. ישוב מעלה מכמש"
+
+
+def test_place_reference_retry_does_not_append_reference_words_or_duplicate_location():
+    from small_claims_agent.interview import merge_incident_place_answer
+
+    initial = "בלוני שמוליק, הקרן 89"
+    assert merge_incident_place_answer(initial, "כתבתי") == initial
+    assert merge_incident_place_answer(initial, "מעלה מכמש") == (
+        "בלוני שמוליק, הקרן 89 מעלה מכמש"
+    )
+    assert merge_incident_place_answer(
+        "בלוני שמוליק, הקרן 89 מעלה מכמש",
+        "רחוב הקרן 89. ישוב מעלה מכמש",
+    ) == "בלוני שמוליק, רחוב הקרן 89. ישוב מעלה מכמש"
+
+
 def test_compound_store_place_splits_brand_address_and_preserves_all_roles():
     case = apply_chat_answer(
         CaseData(), "incident_place", "חנות KSP רחוב ירושלים 3 תל אביב"
     )
-    case = apply_chat_answer(case, "defendant.full_name", "כתבתי")
+    try:
+        apply_chat_answer(case, "defendant.full_name", "כתבתי")
+        assert False, "a place-derived name must be confirmed, not silently applied"
+    except InterviewAnswerError as exc:
+        assert "KSP" in str(exc)
+    case = apply_chat_answer(case, "defendant.full_name", "KSP")
     case = apply_chat_answer(case, "defendant_role", "יבואן / נותן שירות / מוכר")
     case = apply_chat_answer(case, "defendant.address", "אותה כתובת")
 
@@ -796,6 +991,13 @@ def test_damage_question_reuses_known_amount():
     prompt = question_for("damage_items", case)
     assert "3,200 ₪" in prompt
     assert "מהתיאור הראשון" in prompt
+
+
+def test_additional_distress_amount_is_not_mistaken_for_total_claim():
+    case = seed_case_from_opening("קניתי מכונת כביסה ב3200 שקל והיא התקלקלה")
+
+    with pytest.raises(InterviewAnswerError, match="7,200 ₪ בסך הכול"):
+        apply_chat_answer(case, "damage_items", "ועוד 4000 עגמת נפש")
 
 
 def test_bare_confirmed_product_amount_gets_a_specific_damage_label():
@@ -859,6 +1061,7 @@ def test_streamlit_transcript_handles_natural_followups(monkeypatch):
         "תל אבי רחוב הארבעה 1 מחסני הזבלה",
         "תל אביב רחוב הארבעה 1 מחסני הזבלה",
         "כתבתי",
+        "כן",
         "מוכר",
         "לא ידוע",
         "כתובת העסק",
@@ -921,6 +1124,7 @@ def test_streamlit_laptop_transcript_keeps_reused_defendant_address(monkeypatch)
         "1.1.26",
         "חנות KSP רחוב ירושלים 3 תל אביב",
         "כתבתי",
+        "כן",
         "יבואן / נותן שירות / מוכר",
         "לא",
         "אותה כתובת",
@@ -1034,6 +1238,49 @@ def test_quality_review_cannot_turn_privacy_placeholders_into_factual_findings()
     assert not cleaned.revision_instructions
 
 
+def test_full_draft_llm_review_and_revision_redact_identity_data(monkeypatch):
+    from small_claims_agent.llm import GeminiAgentClient
+
+    case = air_conditioner_sample()
+    records = retrieve_authorities_for_case(case)
+    authorities = [record.model_dump(mode="json") for record in records]
+    draft = compose_claim_markdown(
+        case,
+        DemoAgentClient().draft_sections(case, authorities),
+        records,
+    )
+    calls = []
+
+    def fake_structured_call(prompt, schema):
+        calls.append((prompt, schema))
+        if schema is DraftReview:
+            return DraftReview(verdict="revise", revision_instructions=["בדקו את התאמת הפרטים בכל המסמך."])
+        return DraftSections(
+            factual_background=["נוסח מתוקן על בסיס העובדות המאושרות."],
+            cause_of_action=[],
+            resolution_attempts=[],
+            relief_explanation="",
+        )
+
+    client = GeminiAgentClient(api_key="test-key")
+    monkeypatch.setattr(client, "_structured_call", fake_structured_call)
+    review = client.review(case, draft, {record.id for record in records})
+    client.revise_sections(case, authorities, draft, review)
+
+    assert len(calls) == 2
+    review_prompt, revise_prompt = calls[0][0], calls[1][0]
+    for prompt in (review_prompt, revise_prompt):
+        assert "טיוטה מלאה" in prompt or "טיוטה המלאה" in prompt
+        assert case.claimant.full_name not in prompt
+        assert case.claimant.address not in prompt
+        assert case.defendant.full_name not in prompt
+        assert case.defendant.address not in prompt
+        assert "[PLAINTIFF_NAME]" in prompt
+        assert "[DEFENDANT_ADDRESS]" in prompt
+    assert "פרסר/י" in review_prompt
+    assert "השווה/י כל הופעה" in review_prompt
+
+
 def test_local_draft_validation_catches_changed_party_details_before_llm_review():
     case = air_conditioner_sample()
     records = retrieve_authorities_for_case(case)
@@ -1046,6 +1293,42 @@ def test_local_draft_validation_catches_changed_party_details_before_llm_review(
     issues = validate_draft(corrupted, {record.id for record in records}, case)
 
     assert any("שם הנתבע/ת" in issue for issue in issues)
+
+    wrong_name_label = markdown.replace(
+        f"**הנתבע/ת:** {case.defendant.full_name}",
+        "**הנתבע/ת:** חברה אחרת בע״מ",
+        1,
+    )
+    name_issues = validate_draft(wrong_name_label, {record.id for record in records}, case)
+    assert any("שם הנתבע/ת בפרק פרטי הצדדים אינו תואם בדיוק" in issue for issue in name_issues)
+
+    wrong_address_label = markdown.replace(
+        f"כתובת למסירה: {case.defendant.address}",
+        "כתובת למסירה: רחוב שגוי 99, חיפה",
+        1,
+    )
+    address_issues = validate_draft(wrong_address_label, {record.id for record in records}, case)
+    assert any("כתובת הנתבע/ת בפרק פרטי הצדדים אינו תואם בדיוק" in issue for issue in address_issues)
+
+
+def test_cross_field_business_name_mismatch_is_flagged_without_auto_overwriting():
+    case = air_conditioner_sample()
+    case.incident_place = "חנות KSP רחוב ירושלים 3 תל אביב"
+    case.defendant.full_name = "KSP Retail בע״מ"
+    warnings = draft_cross_field_warnings("", case)
+
+    assert len(warnings) == 1
+    assert "KSP" in warnings[0]
+    assert "KSP Retail בע״מ" in warnings[0]
+    assert "ודאו שהשם שבטיוטה תואם לקבלה" in warnings[0]
+
+
+def test_generic_place_reference_is_not_misread_as_a_business_name():
+    from small_claims_agent.interview import defendant_name_reference_candidate
+
+    case = air_conditioner_sample()
+    assert defendant_name_reference_candidate("ציינתי", case) == ""
+    assert draft_cross_field_warnings("", case) == []
 
 
 def test_placeholder_store_is_not_treated_as_a_real_location():
@@ -1165,6 +1448,56 @@ def test_large_nonpecuniary_amount_requires_explicit_confirmation():
     assert sum(item.amount for item in confirmed) == Decimal("7200")
 
 
+def test_single_distress_amount_preserves_opening_price_and_confirmation_yes_completes():
+    case = seed_case_from_opening("קניתי מכונת כביסה ב3200 שקל ואחרי שבוע היא התפוצצה")
+    original = "ועוד 4000 עגמת נפש"
+
+    with pytest.raises(InterviewAnswerError, match="7,200 ₪ בסך הכול"):
+        apply_chat_answer(case, "damage_items", original)
+    assert damage_confirmation_intent([original], "כן") == "yes"
+    confirmed_answer = merge_damage_confirmation([original], "כן")
+    assert confirmed_answer == f"{original} בוודאות"
+    confirmed = parse_damage_items(confirmed_answer, case.damage_items[0].amount)
+    assert [(item.label, item.amount) for item in confirmed] == [
+        ("השבת מחיר המוצר", Decimal("3200")),
+        ("טרחה ועוגמת נפש", Decimal("4000")),
+    ]
+
+
+def test_unqualified_distress_amount_produces_consistent_total_clarification():
+    with pytest.raises(InterviewAnswerError) as exc_info:
+        parse_damage_items("4000 עגמת נפש", Decimal("3200"))
+    message = str(exc_info.value)
+    assert "3,200 ₪ למחיר המוצר" in message
+    assert "4,000 ₪ לעוגמת נפש" in message
+    assert "7,200 ₪ בסך הכול" in message
+
+
+def test_local_fallback_claim_description_preserves_exploded_washer_fact():
+    case = seed_case_from_opening(
+        "קניתי מכונת כביסה ב3200 ואחרי שבוע היא התפוצצה. התקשרתי לחנות 3 פעמים "
+        "והם סירבו לפצות אותי, הלכתי לשם גם והם גירשו אותי"
+    )
+    description = formal_case_description(case)
+
+    assert "מכונת הכביסה התפוצצה אחרי שבוע" in description
+    assert "התגלעה מחלוקת" not in description
+
+
+def test_local_fallback_resolution_attempt_preserves_phone_visit_and_expulsion():
+    case = CaseData(product_or_service_details="מכונת כביסה")
+    formal = formalize_resolution_attempt(
+        "התקשרתי לחנות 3 פעמים והם סירבו לפצות אותי, הלכתי לשם גם והם גירשו אותי",
+        case,
+    )
+
+    assert "בטלפון" in formal
+    assert "3 פעמים בטלפון" in formal
+    assert "באופן פיזי" in formal
+    assert "הבקשה נדחתה" in formal
+    assert "גורש/ה מן המקום" in formal
+
+
 def test_large_nonpecuniary_amount_requires_confirmation_without_opening_amount():
     try:
         parse_damage_items("מחיר מוצר 3500 עוגמת נפש 10000")
@@ -1173,6 +1506,62 @@ def test_large_nonpecuniary_amount_requires_confirmation_without_opening_amount(
         assert "13,500" in str(exc)
     confirmed = parse_damage_items("מחיר מוצר 3500 עוגמת נפש 10000 בוודאות")
     assert sum(item.amount for item in confirmed) == Decimal("13500")
+
+
+def test_common_misspellings_of_damage_confirmation_are_accepted_locally():
+    for typo in ("בודאות", "בודאדות", "בוודאת"):
+        confirmed = parse_damage_items(f"מחיר מוצר 3500 עוגמת נפש 10000 {typo}")
+        assert sum(item.amount for item in confirmed) == Decimal("13500")
+    inline = parse_damage_items("מחיר מוצר 3500 עוגמת נפש 10000 כן זה הסך הכולל")
+    assert sum(item.amount for item in inline) == Decimal("13500")
+
+
+def test_damage_confirmation_uses_contextual_yes_no_and_fuzzy_affirmations():
+    pending = ["מחיר מוצר 3500 עוגמת נפש 10000"]
+    for answer in ("כן", "נכון", "כן, בדיוק", "בודאדות", "בוודאות"):
+        assert damage_confirmation_intent(pending, answer) == "yes"
+    for answer in ("לא", "לא נכון", "לא, הסכום הוא 9000", "כן, אבל הסכום הוא 9000", "בודדות"):
+        assert damage_confirmation_intent(pending, answer) != "yes"
+    assert damage_confirmation_intent(pending, "לא") == "no"
+    assert damage_confirmation_intent(pending, "לא, הסכום הוא 9000") is None
+
+
+def test_misspelled_standalone_damage_confirmation_reuses_pending_itemization():
+    original = "3500 מזגן 15000 עגמת נפש"
+    merged = merge_damage_confirmation([original], "בודאדות")
+    assert merged == f"{original} בוודאות"
+    assert sum(item.amount for item in parse_damage_items(merged)) == Decimal("18500")
+
+
+def test_damage_confirmation_typo_is_not_accepted_when_unrelated():
+    try:
+        parse_damage_items("מחיר מוצר 3500 עוגמת נפש 10000 בודדות")
+        assert False, "unrelated text must not be treated as confirmation"
+    except InterviewAnswerError as exc:
+        assert "13,500" in str(exc)
+
+
+def test_gemini_connection_diagnostic_is_actionable_and_does_not_store_exception_text():
+    class ConnectError(Exception):
+        pass
+
+    error = ConnectError("request URL had a token=secret-value")
+    diagnostic = _provider_error_diagnostic(error, "gemini-test", "StateExtraction")
+    assert diagnostic["category"] == "connection"
+    assert diagnostic["operation"] == "StateExtraction"
+    assert diagnostic["exception_chain"] == ["ConnectError"]
+    assert "secret-value" not in str(diagnostic)
+    assert "רשת" in diagnostic["hint"]
+
+
+def test_gemini_http_status_diagnostic_distinguishes_quota_errors():
+    class ResourceExhausted(Exception):
+        status_code = 429
+
+    diagnostic = _provider_error_diagnostic(ResourceExhausted("private body"), "gemini-test", "DraftReview")
+    assert diagnostic["category"] == "quota_or_rate_limit"
+    assert diagnostic["http_status"] == 429
+    assert "private body" not in str(diagnostic)
 
 
 def test_standalone_damage_confirmation_reuses_itemized_answer():
@@ -1243,7 +1632,49 @@ def test_invalid_model_draft_is_replaced_by_valid_local_draft():
 
     assert result["draft_markdown"]
     assert not result["validation_errors"]
-    assert any("טיוטת Gemini" in warning for warning in result["warnings"])
+    assert any("טיוטת המודל" in warning for warning in result["warnings"])
+
+
+def test_graph_revises_and_rechecks_full_draft_once_after_review_findings():
+    class RevisingClient(DemoAgentClient):
+        def __init__(self):
+            self.review_calls = 0
+            self.revision_calls = 0
+
+        def review(self, case, draft, authority_ids):
+            self.review_calls += 1
+            if self.review_calls == 1:
+                assert "תיאור המקרה" in draft
+                assert "פרטי הצדדים" in draft
+                return DraftReview(
+                    verdict="revise",
+                    clarity_issues=["יש לחדד את הקשר בין התקלה לבין הסעד המבוקש."],
+                    revision_instructions=["נסח מחדש את הרקע תוך שמירת העובדות המאומתות."],
+                )
+            assert "תיאור המקרה" in draft
+            assert "רשימת נספחים" in draft
+            return DraftReview(verdict="pass")
+
+        def revise_sections(self, case, authorities, draft, review):
+            self.revision_calls += 1
+            assert review.verdict == "revise"
+            return super().draft_sections(case, authorities)
+
+    client = RevisingClient()
+    case = air_conditioner_sample()
+    state = initial_state(case)
+    state["generate_requested"] = True
+    result = build_graph(client).invoke(
+        state,
+        {"configurable": {"thread_id": "draft-revise-and-recheck-test"}},
+    )
+
+    assert not result["validation_errors"]
+    assert client.review_calls == 2
+    assert client.revision_calls == 1
+    assert result["revision_count"] == 1
+    assert result["draft_review"]["verdict"] == "pass"
+    assert any("נוסח הטיוטה עודכן" in warning for warning in result["warnings"])
 
 
 def test_natural_defendant_correction_commands_are_understood():
@@ -1382,10 +1813,13 @@ def test_in_person_double_charge_complaint_and_denial_are_accepted():
 
 def test_previous_restaurant_name_can_be_reused_from_place():
     case = CaseData(incident_place="מסעדת יוסי ובניו, קניון מלחה ירושלים")
-    updated = apply_chat_answer(case, "defendant.full_name", "כתבתי קודם")
+    try:
+        apply_chat_answer(case, "defendant.full_name", "כתבתי קודם")
+        assert False, "a place-derived name must be confirmed, not silently applied"
+    except InterviewAnswerError as exc:
+        assert "מסעדת יוסי ובניו" in str(exc)
+    updated = apply_chat_answer(case, "defendant.full_name", "מסעדת יוסי ובניו")
     assert updated.defendant.full_name == "מסעדת יוסי ובניו"
-    same = apply_chat_answer(case, "defendant.full_name", "אותו דבר")
-    assert same.defendant.full_name == "מסעדת יוסי ובניו"
 
 
 def test_claimant_saying_amarti_is_not_mistaken_for_defendant_response():
@@ -1514,6 +1948,8 @@ def test_confirmation_accepts_completed_form_wording():
     assert confirmation_is_yes("מאושר")
     assert confirmation_is_yes("מאושרת")
     assert confirmation_is_yes("מאושר!")
+    assert confirmation_is_yes("מדויק")
+    assert confirmation_is_yes("מדוייק")
 
 
 def test_laptop_case_description_is_formal_and_preserves_the_broken_screen_fact():
@@ -1562,6 +1998,87 @@ def test_in_person_method_fragment_completes_a_pending_contact_response():
 
     assert prior_attempt_fragment_is_relevant("הגעה לחנות", case, has_pending_fragment=True)
     assert apply_chat_answer(case, "prior_attempts", combined).prior_attempts == [combined]
+
+
+def test_walked_to_shop_and_partial_voucher_offer_is_valid_resolution_attempt():
+    case = CaseData(product_or_service_details="מקרר")
+    answer = "הלכתי לחנות והם הסכימו רק לתת לי שובר על 200 שקל ולא לתקן או להחליף"
+
+    assert prior_attempt_has_method(answer)
+    assert prior_attempt_has_outcome(answer)
+    assert prior_attempt_fragment_is_relevant(answer, case)
+    assert apply_chat_answer(case, "prior_attempts", answer).prior_attempts == [answer]
+
+
+def test_opening_resolution_attempt_with_walked_and_voucher_is_reusable():
+    opening = (
+        "קניתי מקרר ב4000 שקל והוא התקלקל אחרי יומיים. הלכתי לחנות והם "
+        "הסכימו רק לתת לי שובר על 200 שקל ולא לתקן או להחליף."
+    )
+    case = seed_case_from_opening(opening)
+
+    extracted = extract_prior_attempt_from_opening(case.event_summary, case)
+    assert "הלכתי לחנות" in extracted
+    assert "שובר על 200 שקל" in extracted
+    updated = apply_chat_answer(case, "prior_attempts", "השתמש במה שכתבתי")
+    assert updated.prior_attempts == [extracted]
+
+
+def test_opening_resolution_attempt_with_returned_to_shop_is_reusable():
+    opening = (
+        "קניתי מזגן והוא התקלקל. חזרתי לחנות לבקש שיחליפו והם סירבו."
+    )
+    case = seed_case_from_opening(opening)
+
+    extracted = extract_prior_attempt_from_opening(opening, case)
+
+    assert extracted == "חזרתי לחנות לבקש שיחליפו והם סירבו"
+    assert prior_attempt_has_method(extracted)
+    assert prior_attempt_has_outcome(extracted)
+    assert apply_chat_answer(case, "prior_attempts", "כן").prior_attempts == [extracted]
+
+
+def test_address_locality_uses_city_after_street_name_instead_of_substring():
+    assert locality_from_text("אילת 45, חולון") == "חולון"
+    assert locality_from_text("רחוב ירושלים 3 תל אביב") == "תל אביב"
+    assert locality_from_text("רחוב חולון 1, אילת") == "אילת"
+
+    case = CaseData(incident_place="אילת 45, חולון")
+    resolution = resolve_jurisdiction(case)
+    assert resolution is not None
+    assert resolution.locality == "חולון"
+    assert resolution.court_city == "תל אביב-יפו"
+
+
+def test_address_parser_extracts_street_number_and_city_in_both_orders():
+    assert parse_address("אילת 45, חולון").street == "אילת"
+    assert parse_address("אילת 45, חולון").house_number == "45"
+    assert parse_address("אילת 45, חולון").locality == "חולון"
+    assert parse_address("תל אביב, הארבעה 5").street == "הארבעה"
+    assert parse_address("תל אביב, הארבעה 5").house_number == "5"
+    assert parse_address("תל אביב, הארבעה 5").locality == "תל אביב"
+
+
+def test_rejected_business_only_location_is_preserved_for_later_explicit_confirmation():
+    merged_place = merge_incident_place_answer("מחסני חשמל", "תל אביב, הארבעה 5")
+    case = CaseData(incident_place=merged_place)
+
+    assert "מחסני חשמל" in merged_place
+    assert defendant_name_reference_candidate("כתבתי", case) == "מחסני חשמל"
+
+
+def test_partial_resolution_attempt_fragments_merge_walk_and_offer():
+    case = CaseData(product_or_service_details="מקרר")
+    partial = merge_partial_answer("הלכתי לחנות", "הם הציעו שובר על 200 שקל")
+
+    assert prior_attempt_has_method(partial)
+    assert prior_attempt_has_outcome(partial)
+    assert apply_chat_answer(case, "prior_attempts", partial).prior_attempts == [partial]
+
+
+def test_unrelated_positive_offer_is_not_enough_without_contact_method_or_dispute():
+    case = CaseData(product_or_service_details="מקרר")
+    assert not prior_attempt_fragment_is_relevant("הם הציעו לי שובר", case)
 
 
 def test_valid_user_revision_regenerates_different_pdf_bytes():
@@ -1769,7 +2286,7 @@ def test_reference_aliases_reuse_prior_business_address_and_attempt():
         product_or_service_details="מקרר",
     )
 
-    case = apply_chat_answer(case, "defendant.full_name", "כתבתי כבר")
+    case = apply_chat_answer(case, "defendant.full_name", "מחסני חשמל")
     case = apply_chat_answer(case, "defendant.address", "כתבתי כבר")
     case = apply_chat_answer(case, "prior_attempts", "השתמש")
 
@@ -1792,6 +2309,7 @@ def test_streamlit_merges_business_and_address_place_fragments(monkeypatch):
         "חנות מחסני חשמל",
         "ירושלים רחוב המסגר 4",
         "כתבתי כבר",
+        "כן",
     ):
         app.chat_input[0].set_value(message).run()
 
@@ -1799,3 +2317,164 @@ def test_streamlit_merges_business_and_address_place_fragments(monkeypatch):
     assert case.incident_place == "חנות מחסני חשמל ירושלים רחוב המסגר 4"
     assert case.defendant.full_name == "מחסני חשמל"
     assert app.session_state["awaiting_field"] == "defendant_role"
+
+
+def test_streamlit_place_retries_do_not_accumulate_and_referenced_business_name_is_confirmed(monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
+    app.session_state["case"] = CaseData(
+        event_summary="קניתי בלון ב20 שקל והוא התפוצץ",
+        transaction_date="01.01.2026",
+        incident_date="01.01.2026",
+        product_or_service_details="בלון",
+    )
+    app.session_state["started"] = True
+    app.session_state["awaiting_field"] = "incident_place"
+    app.session_state["completed_fields"] = {
+        "event_summary", "transaction_date", "incident_date", "product_or_service_details"
+    }
+    app.run()
+
+    app.chat_input[0].set_value("בלוני שמוליק, הקרן 89").run()
+    assert app.session_state["partial_answers"]["incident_place"] == "בלוני שמוליק, הקרן 89"
+
+    app.chat_input[0].set_value("כתבתי").run()
+    assert app.session_state["partial_answers"]["incident_place"] == "בלוני שמוליק, הקרן 89"
+    assert "כתבתי" not in app.session_state["partial_answers"]["incident_place"]
+
+    app.chat_input[0].set_value("מעלה מכמש").run()
+    assert app.session_state["case"].incident_place == "בלוני שמוליק, הקרן 89 מעלה מכמש"
+    assert app.session_state["awaiting_field"] == "defendant.full_name"
+
+    app.chat_input[0].set_value("כתבתי").run()
+    assert app.session_state["pending_field_confirmation"]["candidate"] == "בלוני שמוליק"
+    app.chat_input[0].set_value("כן").run()
+    assert app.session_state["case"].defendant.full_name == "בלוני שמוליק"
+
+
+def test_streamlit_confirms_place_derived_defendant_name_before_using_it(monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
+    case = CaseData(
+        event_summary="קניתי מקרר ב4000 שקל והוא התקלקל אחרי שבוע",
+        transaction_date="01.01.2026",
+        incident_date="08.01.2026",
+        incident_place="חנות מחסני חשמל ירושלים רחוב המסגר 4",
+        product_or_service_details="מקרר",
+    )
+    app.session_state["case"] = case
+    app.session_state["started"] = True
+    app.session_state["awaiting_field"] = "defendant.full_name"
+    app.session_state["completed_fields"] = {
+        "event_summary", "transaction_date", "incident_date", "incident_place", "product_or_service_details"
+    }
+    app.run()
+
+    app.chat_input[0].set_value("ציינתי את השם").run()
+    assert app.session_state["case"].defendant.full_name == ""
+    assert app.session_state["pending_field_confirmation"]["candidate"] == "מחסני חשמל"
+    assert "האם התכוונתם לשם הזה" in app.session_state["messages"][-1]["content"]
+
+    app.chat_input[0].set_value("לא").run()
+    assert app.session_state["case"].defendant.full_name == ""
+    assert app.session_state["pending_field_confirmation"] is None
+    app.chat_input[0].set_value("מחסני חשמל בע״מ").run()
+    assert app.session_state["case"].defendant.full_name == "מחסני חשמל בע״מ"
+
+
+def test_streamlit_accepts_exact_prior_attempt_confirmation_as_yes(monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+    from small_claims_agent.interview import extract_prior_attempt_from_opening
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
+    case = CaseData(
+        event_summary=(
+            "קניתי מקרר ב4000 שקל והוא התקלקל אחרי שבוע. הלכתי לחנות וביקשתי "
+            "שיחליפו לי, הם אמרו שאין אחריות."
+        ),
+        transaction_date="01.01.2026",
+        incident_date="08.01.2026",
+        incident_place="חנות בירושלים",
+        product_or_service_details="מקרר",
+    )
+    expected_attempt = extract_prior_attempt_from_opening(case.event_summary, case)
+    assert expected_attempt
+    app.session_state["case"] = case
+    app.session_state["started"] = True
+    app.session_state["awaiting_field"] = "prior_attempts"
+    app.session_state["completed_fields"] = {
+        "event_summary", "transaction_date", "incident_date", "incident_place", "product_or_service_details",
+        "defendant.full_name", "defendant_role", "defendant.identifier", "defendant.address", "defendant.phone",
+    }
+    app.run()
+
+    app.chat_input[0].set_value("מדויק").run()
+
+    assert not app.exception
+    assert app.session_state["case"].prior_attempts == [expected_attempt]
+    assert app.session_state["awaiting_field"] != "prior_attempts"
+
+
+def test_streamlit_hides_pdf_and_keeps_chat_open_during_draft_clarification(monkeypatch):
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
+    case = air_conditioner_sample()
+    records = retrieve_authorities_for_case(case)
+    sections = DemoAgentClient().draft_sections(
+        case, [record.model_dump(mode="json") for record in records]
+    )
+    markdown = compose_claim_markdown(case, sections, records)
+    app.session_state["case"] = case
+    app.session_state["started"] = True
+    app.session_state["ready"] = True
+    app.session_state["draft_markdown"] = markdown
+    app.session_state["draft_editor"] = markdown
+    app.session_state["draft_authority_ids"] = {record.id for record in records}
+    app.session_state["draft_authorities"] = [record.model_dump(mode="json") for record in records]
+    app.session_state["draft_clarifications"] = [
+        {
+            "field": "event_summary",
+            "case_excerpt": "המזגן התקלקל אחרי שבוע",
+            "draft_excerpt": "המוצר לא פעל",
+            "clarification_question": "האם מדובר באותו אירוע?",
+        }
+    ]
+    app.session_state["draft_clarification_index"] = 0
+    app.run()
+
+    assert not app.exception
+    download_labels = {button.label for button in app.get("download_button")}
+    assert "הורדת PDF של כתב התביעה" not in download_labels
+    assert app.chat_input[0].disabled is False
+    assert any("לפני הפקת ה־PDF" in element.value for element in app.info)
+
+    app.chat_input[0].set_value("כן").run()
+
+    assert not app.exception
+    assert app.session_state["draft_clarifications"] == []
+    assert "הורדת PDF של כתב התביעה" in {
+        button.label for button in app.get("download_button")
+    }

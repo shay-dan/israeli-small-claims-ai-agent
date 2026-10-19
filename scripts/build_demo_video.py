@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 SLIDES = (
     ("01-start.png", "Conversational intake in Hebrew"),
-    ("02-opening.png", "Gemini-assisted extraction with local validation"),
+    ("02-opening.png", "Provider-gateway extraction with local validation"),
     ("03-interview.png", "Dynamic follow-up questions and state tracking"),
     ("04-confirmation.png", "User reviews the complete factual summary"),
     ("05-approved.png", "Explicit confirmation before drafting"),

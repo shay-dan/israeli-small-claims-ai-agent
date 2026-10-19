@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
@@ -12,6 +13,8 @@ from .legal import classify_category
 from .models import CaseData, ClaimCategory, DamageItem, EvidenceItem, Party, RemedyType
 from .validators import QUESTION_TEXT, calculate_filing_fee, validate_case
 
+
+HOT_RELOAD_VERSION = 6
 
 WELCOME_MESSAGE = (
     "שלום, אני אעזור לך להכין טיוטת כתב תביעה קטנה באמצעות ראיון קצר. "
@@ -124,6 +127,12 @@ REFERENCE_ONLY = {
     "כמו מקום",
     "כמו מקום העסקה",
     "כמו הכתובת הקודמת",
+    "ציינתי",
+    "ציינתי קודם",
+    "ציינתי כבר",
+    "ציינתי את השם",
+    "כבר ציינתי את השם",
+    "כתבתי את השם",
 }
 PRODUCT_WORDS = ("מזגן", "מקרר", "מכונת כביסה", "מדיח", "טלוויזיה", "מחשב", "טלפון", "ספה", "מוצר")
 SERVICE_CONTEXT_WORDS = (
@@ -144,12 +153,76 @@ HEBREW_KEYBOARD_MAP = str.maketrans(
 )
 DAMAGE_CONFIRMATIONS = (
     "בוודאות",
-    "זה הסך הכולל",
-    "זה הסכום הכולל",
-    "כן זה הסכום",
-    "כן, זה הסכום",
-    "מאשר את הפירוט",
 )
+DAMAGE_CONFIRMATION_WORD = "בוודאות"
+
+
+def _normalize_damage_confirmation(text: str) -> str:
+    """Canonicalize a short affirmative suffix, including unforeseen small typos."""
+    amounts = list(re.finditer(r"\d[\d,]*(?:\.\d+)?", text))
+    if amounts:
+        amount = amounts[-1]
+        suffix = text[amount.end():].strip()
+        if suffix and damage_confirmation_intent([text], suffix) == "yes":
+            return text[:amount.end()] + " " + DAMAGE_CONFIRMATION_WORD
+    match = re.search(r"(?<!\w)([א-ת]{2,})([.!?,]*)\s*$", text)
+    if match and damage_confirmation_intent([text], match.group(1)) == "yes":
+        return text[:match.start(1)] + DAMAGE_CONFIRMATION_WORD + text[match.end(1):]
+    return text
+
+
+def _damage_itemization_candidate(previous_answers: list[str]) -> str | None:
+    return next(
+        (
+            answer
+            for answer in reversed(previous_answers)
+            if len(re.findall(r"\d[\d,]*", answer)) >= 2
+            or (
+                len(re.findall(r"\d[\d,]*", answer)) == 1
+                and any(word in answer for word in ("עוגמת", "עגמת", "נפש", "טרחה"))
+            )
+        ),
+        None,
+    )
+
+
+def damage_confirmation_intent(previous_answers: list[str], current: str) -> str | None:
+    """Interpret a short yes/no response only when a pending itemization needs confirmation."""
+    candidate = _damage_itemization_candidate(previous_answers)
+    if not candidate:
+        return None
+
+    normalized = current.lower().strip(" \t\r\n׳'\"״׳")
+    normalized = re.sub(r"[.!?,;:־–—]+", " ", normalized)
+    normalized = " ".join(normalized.split())
+    negative_answers = {"לא", "לא נכון", "הסכום לא נכון", "הפירוט לא נכון", "לא מדויק", "לא מדוייק"}
+    # Replies with new figures are corrections, not a bare yes/no response.
+    if re.search(r"\d", normalized):
+        return None
+    if normalized in negative_answers or normalized.startswith("לא "):
+        return "no"
+
+    # Never treat a reply with a negation or a long explanation as confirmation.
+    if re.search(r"\b(?:לא|אין|טעות|שגוי|שגויה)\b", normalized) or len(normalized) > 40:
+        return None
+    positive_answers = {
+        "כן", "נכון", "מאשר", "מאשרת", "מאושר", "מאושרת", "בדיוק", "הסכום נכון",
+        "הפירוט נכון", "כן נכון", "כן זה נכון", "כן הסכום נכון", "כן הפירוט נכון",
+        "כן זה הסכום", "זה הסכום הכולל", "זה הסך הכולל", "מאשר את הפירוט",
+    }
+    if normalized in positive_answers:
+        return "yes"
+    if normalized.startswith(("כן ", "נכון ", "מאשר ", "מאשרת ", "בדיוק ")):
+        return "yes"
+
+    # Match a short affirmation to a small set of canonical ideas instead of
+    # enumerating individual misspellings. Context and the no-number rule keep it conservative.
+    if len(normalized) >= 5 and any(
+        SequenceMatcher(None, normalized, anchor).ratio() >= 0.80
+        for anchor in ("בוודאות", "מאשר", "מאשרת", "נכון")
+    ):
+        return "yes"
+    return None
 OPENING_PROBLEM_TERMS = (
     "התקלקל",
     "תקלה",
@@ -241,6 +314,12 @@ OPENING_DAMAGE_DESCRIPTION_PATTERN = re.compile(
     r")"
 )
 
+OPENING_MECHANICAL_FAILURE_PATTERN = re.compile(
+    r"(?:נפל\s+(?:לו|לה)\s+(?:ה)?(?:מנוע|גלגל|חלק|מסך)|"
+    r"(?:המנוע|הגלגל|המסך|החלק)\s+נפל)",
+    flags=re.IGNORECASE,
+)
+
 
 class InterviewAnswerError(ValueError):
     pass
@@ -284,7 +363,7 @@ def extract_purchased_subject(text: str) -> str:
     """Extract only a verbatim product/service phrase from common purchase syntax."""
     normalized = " ".join(text.split()).strip()
     patterns = (
-        r"(?:קניתי|רכשתי|הזמנתי)\s+(.+?)(?=\s+ב\s*[\d,]+|\s+בסכום|\s+במחיר|\s+ואחרי|\s+אחרי|[,.;]|$)",
+        r"(?:קניתי|רכשתי|הזמנתי)\s+(.+?)(?=\s+ב\s*[\d,]+|\s+בסכום|\s+במחיר|\s+ואחרי|\s+אחרי|\s+ונפל\b|\s+נפל\b|\s+והתקלקל\b|\s+והפסיק\b|\s+ונשבר\b|[,.;]|$)",
         r"שכרתי\s+(.+?)(?=\s+ו?שילמתי|\s+בסכום|\s+במחיר|\s+אבל|\s+ואחרי|\s+אחרי|[,.;]|$)",
         r"שילמתי\s+(?:[\d,]+(?:\.\d+)?\s*(?:₪|שקלים?|שקל|ש[״\"]?ח)?\s*)?על\s+(.+?)"
         r"(?=\s+(?:ואמרו|והבטיחו|והוסבר|ואחרי|אבל|לאחר|אחרי)|[,.;]|$)",
@@ -324,6 +403,7 @@ def opening_story_missing_parts(text: str) -> list[str]:
     has_problem = (
         any(term in normalized for term in OPENING_PROBLEM_TERMS)
         or bool(OPENING_DAMAGE_DESCRIPTION_PATTERN.search(normalized))
+        or bool(OPENING_MECHANICAL_FAILURE_PATTERN.search(normalized))
         or bool(
         re.search(
             r"(?:הפסיק|הפסיקה|חדל|חדלה)\s+ל?(?:עבוד|פעול)|"
@@ -410,8 +490,8 @@ def question_for(field: str, case: CaseData | None = None) -> str:
             formal_attempt = formalize_resolution_attempt(opening_attempt, case)
             return (
                 f"בתיאור הראשון כבר זיהיתי ניסיון פתרון: {formal_attempt} "
-                "אם זה מדויק, כתבו ״השתמש במה שכתבתי״. אם חסר פרט, ציינו רק מה לתקן או להוסיף, "
-                "למשל מתי פניתם או כמה פעמים."
+                "אם זה מדויק, כתבו ״כן״. אם לא, כתבו ״לא״ ואז ציינו מה לתקן, "
+                "או כתבו את הערך הנכון."
             )
     if field == "evidence_confirmation" and case and case.evidence:
         known = ", ".join(item.name for item in case.evidence)
@@ -452,11 +532,16 @@ def apply_chat_answer_with_assessment(
                     )
                 normalized = _address_from_prior_place(case)
             elif field == "defendant.full_name":
-                normalized = _business_name_candidate(case.incident_place)
-                if not normalized:
+                candidate = _business_name_candidate(case.incident_place)
+                if candidate:
                     raise InterviewAnswerError(
-                        "ראיתי שציינתם קודם את מקום העסקה, אבל כדי למנוע טעות דרוש שם העסק המדויק כפי שמופיע בקבלה."
+                        f"מהמקום שתיארתם זיהיתי שם אפשרי: ״{candidate}״. "
+                        "האם התכוונתם לשם הזה? אשרו אותו במפורש או כתבו את השם הנכון."
                     )
+                raise InterviewAnswerError(
+                    "ראיתי שהתייחסתם למידע קודם, אבל לא זיהיתי ממנו שם עסק ברור. "
+                    "כתבו את השם המשפטי המדויק כפי שמופיע בקבלה או בחשבונית."
+                )
             else:
                 raise InterviewAnswerError("כדי שהמסמך לא יכיל את המילה ״כתבתי״, צריך להקליד כאן את הפרט עצמו.")
         if field == "defendant.address" and _means_none(normalized):
@@ -539,7 +624,10 @@ def apply_chat_answer_with_assessment(
     elif field == "defendant_role":
         data[field] = _normalize_defendant_role(normalized)
     elif field == "prior_attempts":
-        if normalized.lower().strip(" .?!") in REFERENCE_ONLY:
+        if (
+            normalized.lower().strip(" .?!") in REFERENCE_ONLY
+            or confirmation_is_yes(normalized)
+        ):
             reused_attempt = extract_prior_attempt_from_opening(case.event_summary, case)
             if not reused_attempt:
                 raise InterviewAnswerError(
@@ -735,7 +823,23 @@ def confirmation_is_yes(text: str) -> bool:
         "הכול נכון",
         "הכל נכון",
         "נכון",
+        "מדויק",
+        "מדוייק",
     }
+
+
+def confirmation_is_no(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    normalized = re.sub(r"[.!?,;:]+$", "", normalized).strip()
+    return normalized in {"לא", "לא נכון", "לא מדויק", "לא מדוייק"}
+
+
+def defendant_name_reference_candidate(text: str, case: CaseData) -> str:
+    """Return a place-derived business-name candidate only for an explicit reference answer."""
+    normalized = " ".join(text.lower().split()).strip(" .?!׳'\"״")
+    if normalized not in REFERENCE_ONLY:
+        return ""
+    return _business_name_candidate(case.incident_place)
 
 
 def is_recall_request(text: str) -> bool:
@@ -923,6 +1027,8 @@ def prior_attempt_has_method(text: str) -> bool:
             "שוחחתי איתה",
             "שוחחתי איתם",
             "נפגשתי",
+            "חזרתי",
+            "הלכתי",
             "הלכתי למסעדה",
             "הגעתי למסעדה",
             "באתי למסעדה",
@@ -965,6 +1071,8 @@ def prior_attempt_has_outcome(text: str) -> bool:
     return bool(
         re.search(
             r"(?:הם|הוא|היא|הנציג(?:ה)?|המוכר(?:ת)?|החנות)\s+(?:אמר|אמרה|אמרו|טען|טענה|טענו)|"
+            r"(?:הם|הוא|היא|הנציג(?:ה)?|המוכר(?:ת)?|החנות)\s+(?:הסכימ|הציע|נתנ|אישר).{0,80}(?:שובר|זיכוי|החזר|לתקן|תיקון|להחליף|החלפה|פיצוי)|"
+            r"(?:הסכימו|הציעו|נתנו|אישרו)\s+(?:לי\s+)?(?:רק\s+)?(?:שובר|זיכוי|החזר|לתקן|תיקון|להחליף|החלפה|פיצוי)|"
             r"(?:אמרו|נאמר|השיבו|השיבה|השיב)\s+לי|"
             r"(?:ו?אמרו|נאמר|השיבו|השיבה|השיב)\s+(?:לי\s+)?(?:ש)?(?:אין|לא)|"
             r"אין\s+(?:החזר|החזרים|החזרות|זיכוי|פיצוי|פיצויים)|"
@@ -1016,7 +1124,7 @@ def extract_prior_attempt_from_opening(text: str, case: CaseData | None = None) 
     """Extract a user-stated resolution attempt for later explicit confirmation."""
     normalized = " ".join(text.split()).strip(" \"'״׳")
     match = re.search(
-        r"((?:פניתי|התקשרתי|צלצלתי|חייגתי|טלפנתי|שלחתי|כתבתי|הגעתי|באתי|"
+        r"((?:פניתי|התקשרתי|צלצלתי|חייגתי|טלפנתי|שלחתי|כתבתי|הלכתי|הגעתי|באתי|חזרתי|"
         r"ניגשתי|ניסיתי\s+להחזיר|ניסיתי\s+לקבל\s+החזר).+)$",
         normalized,
     )
@@ -1072,6 +1180,7 @@ def correction_command(text: str) -> tuple[str, str] | None:
 
 
 def parse_damage_items(answer: str, known_transaction_amount: Decimal | None = None) -> list[DamageItem]:
+    answer = _normalize_damage_confirmation(answer)
     if re.search(r"(?<![\d.])-\d[\d,]*(?:\.\d+)?", answer):
         raise InterviewAnswerError("סכום נזק אינו יכול להיות שלילי. כתבו את הסכום החיובי המבוקש מבית המשפט.")
     parseable_answer = answer
@@ -1084,6 +1193,33 @@ def parse_damage_items(answer: str, known_transaction_amount: Decimal | None = N
         if not matches:
             continue
         amounts = [_decimal_from_match(match.group()) for match in matches]
+        extra_marker = re.search(r"(?:^|\s)ועוד\s+", line)
+        describes_non_pecuniary = any(word in line for word in ("עוגמת", "עגמת", "טרחה", "נפש"))
+        has_explicit_total = any(word in line for word in ("מחיר", "מוצר", "סהכ", "סך הכל", "כולל"))
+        if (
+            len(amounts) == 1
+            and known_transaction_amount
+            and describes_non_pecuniary
+            and (
+                (extra_marker and extra_marker.end() <= matches[0].start())
+                or not has_explicit_total
+            )
+        ):
+            items.extend(
+                [
+                    DamageItem(
+                        label="השבת מחיר המוצר",
+                        amount=known_transaction_amount,
+                        kind="direct",
+                    ),
+                    DamageItem(
+                        label="טרחה ועוגמת נפש",
+                        amount=amounts[0],
+                        kind="non_pecuniary",
+                    ),
+                ]
+            )
+            continue
         if (
             len(amounts) == 1
             and known_transaction_amount
@@ -1135,24 +1271,17 @@ def parse_damage_items(answer: str, known_transaction_amount: Decimal | None = N
             f"זיהיתי רכיבי נזק כספי והוצאות בסך {pecuniary_total:,.0f} ₪{price_note}, "
             f"ועוד {non_pecuniary:,.0f} ₪ לעוגמת נפש, "
             f"כלומר {total:,.0f} ₪ בסך הכול. אם התכוונתם לסך כולל אחר, כתבו את שני הרכיבים מחדש; "
-            "אם זה אכן הפירוט המבוקש, כתבו ״בוודאות״ או ״זה הסך הכולל״."
+            "האם הפירוט והסכום הכולל נכונים? כתבו ״כן״ או ״לא״. אם לא, שלחו פירוט מתוקן עם סכום לכל רכיב."
         )
     return items
 
 
 def merge_damage_confirmation(previous_answers: list[str], current: str) -> str | None:
     """Attach a natural confirmation to the last itemized damage answer."""
-    normalized = " ".join(current.lower().split()).strip(" .!?")
-    explicit_confirmation = any(phrase in normalized for phrase in DAMAGE_CONFIRMATIONS)
-    short_confirmation = normalized in {"כן", "מאשר", "מאשרת"}
-    if not explicit_confirmation and not short_confirmation:
+    if damage_confirmation_intent(previous_answers, current) != "yes":
         return None
-    candidate = next(
-        (answer for answer in reversed(previous_answers) if len(re.findall(r"\d[\d,]*", answer)) >= 2),
-        None,
-    )
-    confirmation = current if explicit_confirmation else "בוודאות"
-    return f"{candidate} {confirmation}" if candidate else None
+    candidate = _damage_itemization_candidate(previous_answers)
+    return f"{candidate} {DAMAGE_CONFIRMATION_WORD}" if candidate else None
 
 
 def interview_progress(case: CaseData, completed_fields: set[str]) -> tuple[int, int]:
@@ -1267,6 +1396,29 @@ def _strip_reference_suffix(text: str) -> str:
 
 
 def _business_name_candidate(place: str) -> str:
+    def clean_candidate(value: str) -> str:
+        candidate = value.strip(" ,.-\"׳'״")
+        candidate = re.sub(r"^(?:חנות|בית העסק)\s+", "", candidate).strip(" ,.-")
+        if not candidate or _is_generic_location_label(candidate):
+            return ""
+        if re.search(r"\b(?:רחוב|שדרות|דרך|שד[׳']?)\b", candidate):
+            return ""
+        if locality_from_text(candidate):
+            return ""
+        return candidate
+
+    parts = [part.strip() for part in re.split(r"[,;]", place) if part.strip()]
+    if len(parts) > 1:
+        # Common order: business, street address, locality.
+        first = clean_candidate(parts[0])
+        if first and not re.search(r"\d", parts[0]):
+            return first
+        # Also support a business name placed after the address.
+        for part in reversed(parts):
+            candidate = clean_candidate(part)
+            if candidate and not re.search(r"\d", part):
+                return candidate
+
     first_segment = " ".join(place.split(",", 1)[0].split()).strip()
     # A natural place answer often combines the brand and its street address,
     # for example "חנות KSP רחוב ירושלים 3 תל אביב". The legal-name field
@@ -1287,15 +1439,56 @@ def _business_name_candidate(place: str) -> str:
     # "מסעדת" or "מלון" commonly form part of the displayed business name.
     generic_prefix = re.match(r"^(?:חנות|בית העסק)\s+(.+)$", before_address)
     if generic_prefix:
-        candidate = generic_prefix.group(1).strip(" ,.-")
-        return candidate if candidate else ""
+        return clean_candidate(generic_prefix.group(1))
     if re.match(r"^(?:מסעדת|מסעדה|חברת|חברה|מועדון|מלון|מוסך)\s+", before_address):
-        return before_address
+        return clean_candidate(before_address)
     match = re.search(r"\b\d{1,4}\s+(.+)$", place.strip())
     if not match:
+        # A rejected first answer may contain only the merchant name (for
+        # example, "מחסני חשמל"). It can be carried into a later location
+        # answer and will still require explicit confirmation before use.
+        if len(before_address.split()) >= 2:
+            return clean_candidate(before_address)
         return ""
-    candidate = match.group(1).strip(" ,.-")
-    return candidate if len(candidate.split()) >= 2 else ""
+    return clean_candidate(match.group(1))
+
+
+def _is_generic_location_label(value: str) -> bool:
+    normalized = " ".join(value.split()).strip(" ,.-")
+    return bool(
+        re.match(
+            r"^(?:ה?נתבע(?:ת)?|ה?חנות|בית העסק|העסק|החברה|בעל העסק|ה?עסק הנתבע(?:ת)?)\b",
+            normalized,
+        )
+    )
+
+
+def merge_incident_place_answer(previous: str, current: str) -> str:
+    """Merge useful location fragments without accumulating reference replies."""
+    previous = " ".join(previous.split()).strip()
+    current = " ".join(current.split()).strip()
+    normalized_current = current.lower().strip(" .?!׳'\"״")
+    if normalized_current in REFERENCE_ONLY:
+        return previous
+    if not previous:
+        return current
+    if not current or current in previous:
+        return previous
+    if previous in current:
+        return current
+    if _is_specific_place(current):
+        existing_business = _business_name_candidate(previous)
+        if existing_business and existing_business not in current:
+            leading_fragment = previous.split(",", 1)[0].strip()
+            business_fragment = (
+                leading_fragment
+                if _business_name_candidate(leading_fragment)
+                else existing_business
+            )
+            separator = ", " if "," in previous else " "
+            return f"{business_fragment}{separator}{current}"
+        return current
+    return merge_partial_answer(previous, current)
 
 
 def _address_from_prior_place(case: CaseData) -> str:
@@ -1426,6 +1619,7 @@ def _amounts_from_text(text: str) -> list[Decimal]:
         "שלושים": 30,
         "ארבעים": 40,
         "חמישים": 50,
+        "מאה": 100,
     }
     for match in re.finditer(
         r"(?<![\d,])(?P<number>\d[\d,]*(?:\.\d+)?|[א-ת]+)\s+אל(?:ף|פים)"
@@ -1500,7 +1694,28 @@ def _is_specific_place(value: str) -> bool:
     normalized = " ".join(value.split()).strip()
     if normalized in VAGUE_PLACES or re.search(r"(?:חנות|סניף)\s*[xXאיקס]\b", normalized):
         return False
-    return is_remote_transaction_place(normalized) or bool(locality_from_text(normalized))
+    return (
+        is_remote_transaction_place(normalized)
+        or bool(locality_from_text(normalized))
+        or _has_address_and_unmapped_locality(normalized)
+    )
+
+
+def _has_address_and_unmapped_locality(value: str) -> bool:
+    """Accept a structured street+number and an explicitly supplied unknown locality."""
+    match = re.search(r"\b(\d{1,4})\b", value)
+    if not match:
+        return False
+    street_part = value[: match.start()].strip(" ,.-")
+    after_number = value[match.end() :].strip(" ,.-")
+    if not street_part or not after_number:
+        return False
+    # The locality need not be in our limited court-routing table. Accept it
+    # as an explicitly provided locality, but do not infer a court from it.
+    if re.match(r"^(?:ב?יישוב|ב?ישוב|בעיר|עיר)\s+\S+", after_number):
+        return True
+    locality_tail = re.split(r"[,;.]", after_number, maxsplit=1)[0].split()
+    return len(locality_tail) >= 2
 
 
 def _validate_place(answer: str) -> None:

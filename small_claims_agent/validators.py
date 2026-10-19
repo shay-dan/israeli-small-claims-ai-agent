@@ -213,19 +213,34 @@ def validate_draft(markdown: str, allowed_authority_ids: set[str], case: CaseDat
         if expected_title not in markdown:
             issues.append("כותרת בית המשפט אינה תואמת למיפוי הסמכות המקומית.")
         party_section = _section(markdown, "פרטי הצדדים", "סמכות מקומית")
-        for value, label in (
-            (case.claimant.full_name, "שם התובע/ת"),
-            (case.claimant.identifier, "מספר הזיהוי של התובע/ת"),
-            (case.claimant.address, "כתובת התובע/ת"),
-            (case.claimant.phone, "טלפון התובע/ת"),
-            (case.claimant.email, "דוא״ל התובע/ת"),
-            (case.defendant.full_name, "שם הנתבע/ת"),
-            (case.defendant.identifier, "מספר הזיהוי של הנתבע/ת"),
-            (case.defendant.address, "כתובת הנתבע/ת"),
-            (case.defendant.phone, "טלפון הנתבע/ת"),
+        phone_matches = re.findall(r"\|\s*טלפון:\s*([^|\n]+)", party_section)
+        party_line_values = {
+            "claimant_name": _party_line_value(party_section, r"^\*\*התובע/ת:\*\*\s*(.*)$", ", ת״ז "),
+            "claimant_id": _party_line_value(party_section, r"^\*\*התובע/ת:\*\*\s*(.*)$", "ת״ז ", after=True),
+            "claimant_address": _party_line_value(party_section, r"^כתובת:\s*(.*)$", " |"),
+            "claimant_phone": phone_matches[0].strip() if phone_matches else "",
+            "claimant_email": _party_line_value(party_section, r"\|\s*דוא״ל:\s*(.*)$"),
+            "defendant_name": _party_line_value(party_section, r"^\*\*הנתבע/ת:\*\*\s*(.*)$", ", מזהה "),
+            "defendant_id": _party_line_value(party_section, r"^\*\*הנתבע/ת:\*\*\s*(.*)$", "מזהה ", after=True),
+            "defendant_address": _party_line_value(party_section, r"^כתובת למסירה:\s*(.*)$", " |"),
+            "defendant_phone": phone_matches[1].strip() if len(phone_matches) > 1 else "",
+        }
+        for key, expected, label in (
+            ("claimant_name", case.claimant.full_name, "שם התובע/ת"),
+            ("claimant_id", case.claimant.identifier, "מספר הזיהוי של התובע/ת"),
+            ("claimant_address", case.claimant.address, "כתובת התובע/ת"),
+            ("claimant_phone", case.claimant.phone, "טלפון התובע/ת"),
+            ("claimant_email", case.claimant.email, "דוא״ל התובע/ת"),
+            ("defendant_name", case.defendant.full_name, "שם הנתבע/ת"),
+            ("defendant_id", case.defendant.identifier or "לא נמסר", "מספר הזיהוי של הנתבע/ת"),
+            ("defendant_address", case.defendant.address, "כתובת הנתבע/ת"),
+            ("defendant_phone", case.defendant.phone or "לא נמסר", "טלפון הנתבע/ת"),
         ):
-            if value and value not in party_section:
-                issues.append(f"{label} שנקלט בראיון אינו מופיע בפרטי הצדדים.")
+            actual = party_line_values[key]
+            if expected and _normalize_field_value(actual) != _normalize_field_value(expected):
+                issues.append(
+                    f"{label} בפרק פרטי הצדדים אינו תואם בדיוק לערך המאומת בראיון."
+                )
         if case.warranty_details and case.warranty_details.strip().rstrip(".") not in markdown:
             issues.append("פרטי האחריות שנקלטו בראיון אינם מופיעים בטיוטה.")
         appendix_section = _section(markdown, "רשימת נספחים", "הצהרה")
@@ -265,6 +280,42 @@ def validate_draft(markdown: str, allowed_authority_ids: set[str], case: CaseDat
         if case.primary_remedy == case.alternative_remedy and case.primary_remedy != RemedyType.NONE:
             issues.append("הסעד העיקרי והחלופי אינם מובחנים.")
     return issues
+
+
+def draft_cross_field_warnings(markdown: str, case: CaseData) -> list[str]:
+    """Return review warnings for cross-field contradictions that need human confirmation."""
+    warnings: list[str] = []
+    if case.incident_place and case.defendant.full_name:
+        # This extracted value stays local: party names and addresses must not
+        # be sent to an LLM. A brand/legal-entity distinction may be legitimate,
+        # so report it as a verification warning rather than overwriting either.
+        from .interview import defendant_name_reference_candidate
+
+        place_name = defendant_name_reference_candidate("ציינתי", case)
+        if place_name and _normalize_field_value(place_name) != _normalize_field_value(case.defendant.full_name):
+            warnings.append(
+                f"בדקו את זהות הנתבע/ת: ממקום העסקה זוהה השם ״{place_name}״, "
+                f"ואילו בשדה הנתבע/ת נמסר ״{case.defendant.full_name}״. "
+                "ייתכן שמדובר בשם מסחרי ובשם משפטי שונים; ודאו שהשם שבטיוטה תואם לקבלה או לחשבונית."
+            )
+    return warnings
+
+
+def _party_line_value(section: str, pattern: str, delimiter: str = "", *, after: bool = False) -> str:
+    match = re.search(pattern, section, flags=re.MULTILINE)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    if delimiter:
+        if after:
+            _, separator, remainder = value.partition(delimiter)
+            return remainder.split(" |", 1)[0].strip() if separator else ""
+        return value.split(delimiter, 1)[0].strip()
+    return value.strip()
+
+
+def _normalize_field_value(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().strip("| ")
 
 
 def approved_description_terms(event_summary: str) -> list[str]:

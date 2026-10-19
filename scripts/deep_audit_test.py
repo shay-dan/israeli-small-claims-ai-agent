@@ -33,7 +33,7 @@ from small_claims_agent.interview import (
     seed_case_from_opening,
 )
 from small_claims_agent.legal import classify_category, retrieve_authorities_for_case
-from small_claims_agent.llm import DemoAgentClient, GeminiAgentClient, ModelUnavailable
+from small_claims_agent.llm import DemoAgentClient, LLMGateway, ModelUnavailable
 from small_claims_agent.models import (
     CaseData,
     ClaimCategory,
@@ -142,7 +142,7 @@ class AuditRunner:
         metadata = {
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
             "python": sys.version.split()[0],
-            "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+            "llm_provider_configured": any(os.getenv(name) for name in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY")),
         }
         JSON_PATH.write_text(
             json.dumps(
@@ -159,7 +159,7 @@ class AuditRunner:
             "# Deep Adversarial Audit Report",
             "",
             f"- Generated: {metadata['generated_at']}",
-            f"- Gemini configured: `{metadata['gemini_configured']}`",
+            f"- LLM provider configured: `{metadata['llm_provider_configured']}`",
             f"- Additional checks: **{len(self.results)}**",
             f"- Passed: **{passed}**",
             f"- Skipped: **{skipped}**",
@@ -837,19 +837,19 @@ def run_pdf_checks(runner: AuditRunner) -> None:
                 )
 
 
-def run_live_gemini(runner: AuditRunner) -> None:
+def run_live_gateway(runner: AuditRunner) -> None:
     load_dotenv(ROOT / ".env")
-    client = GeminiAgentClient(max_retries=1)
+    client = LLMGateway()
     if not client.available:
         runner.results.append(
             AuditResult(
-                "Live Gemini reliability",
+                "Live LLM gateway reliability",
                 "L00",
-                "Gemini availability",
+                "Provider availability",
                 "SKIP",
                 "high",
                 "configured for optional live-model checks",
-                "GEMINI_API_KEY unavailable; live checks skipped",
+                "No provider key available; live checks skipped",
                 0,
             )
         )
@@ -862,7 +862,7 @@ def run_live_gemini(runner: AuditRunner) -> None:
     for index, opening in enumerate(openings, 1):
         local_case = seed_case_from_opening(opening)
         runner.check(
-            "Live Gemini reliability",
+            "Live LLM gateway reliability",
             f"L{index:02d}",
             f"Schema-valid extraction {index}",
             "valid StateExtraction without forbidden list updates",
@@ -879,7 +879,7 @@ def run_live_gemini(runner: AuditRunner) -> None:
     records = retrieve_authorities_for_case(case)
     for index in range(4, 6):
         sections = runner.check(
-            "Live Gemini reliability",
+            "Live LLM gateway reliability",
             f"L{index:02d}",
             f"Repeated schema-valid drafting call {index - 3}",
             "valid sections and valid composed draft",
@@ -911,7 +911,7 @@ def run_live_gemini(runner: AuditRunner) -> None:
                 }
 
             runner.check(
-                "Live Gemini reliability",
+                "Live LLM gateway reliability",
                 f"L{index:02d}V",
                 f"Validate or safely replace live composed draft {index - 3}",
                 "raw draft valid, or deterministic fallback valid",
@@ -965,7 +965,7 @@ def main() -> int:
     run_edit_integrity(runner)
     run_limits_and_fallbacks(runner)
     run_pdf_checks(runner)
-    run_live_gemini(runner)
+    run_live_gateway(runner)
     runner.write()
     passed = sum(item.status == "PASS" for item in runner.results)
     skipped = sum(item.status == "SKIP" for item in runner.results)

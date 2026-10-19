@@ -155,6 +155,8 @@ class ClaimGraphState(TypedDict, total=False):
     generate_requested: bool
     manual_mode: bool
     model_status: str
+    model_diagnostic: dict[str, Any]
+    model_diagnostics: list[dict[str, Any]]
     missing_fields: list[str]
     validation_errors: list[str]
     warnings: list[str]

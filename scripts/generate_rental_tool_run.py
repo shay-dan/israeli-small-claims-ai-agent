@@ -20,7 +20,7 @@ from small_claims_agent.interview import (
     seed_case_from_opening,
 )
 from small_claims_agent.legal import retrieve_authorities_for_case
-from small_claims_agent.llm import GeminiAgentClient, controlled_cause_paragraphs
+from small_claims_agent.llm import LLMGateway, controlled_cause_paragraphs
 from small_claims_agent.models import CaseData
 from small_claims_agent.pdf_export import save_pdf
 from small_claims_agent.validators import validate_case, validate_draft
@@ -63,7 +63,7 @@ INTERVIEW_ANSWERS = (
 
 
 def _preserve_opening_facts(local_case: CaseData, extracted_case: CaseData) -> CaseData:
-    """Mirror the app's rule: Gemini may enrich, but never rewrite the opening facts."""
+    """Mirror the app's rule: the LLM may enrich, but never rewrite opening facts."""
     extracted_case.event_summary = local_case.event_summary
     extracted_case.transaction_date = local_case.transaction_date
     extracted_case.incident_date = local_case.incident_date
@@ -84,9 +84,9 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     load_dotenv(PROJECT_ROOT / ".env")
 
-    client = GeminiAgentClient()
+    client = LLMGateway()
     if not client.available:
-        raise RuntimeError("GEMINI_API_KEY is missing; refusing to create a claimed live-tool output")
+        raise RuntimeError("No provider API key is configured; refusing to create a live-tool output")
 
     graph = build_graph(client)
     local_case = seed_case_from_opening(OPENING)
@@ -99,7 +99,7 @@ def main() -> None:
         {"configurable": {"thread_id": f"rental-opening-{uuid.uuid4()}"}},
     )
     if opening_result.get("manual_mode"):
-        raise RuntimeError(f"Gemini opening extraction fell back: {opening_result.get('model_status')}")
+        raise RuntimeError(f"LLM opening extraction fell back: {opening_result.get('model_status')}")
     case = _preserve_opening_facts(
         local_case,
         CaseData.model_validate(opening_result["case"]),
@@ -111,11 +111,11 @@ def main() -> None:
         case = apply_chat_answer(case, field, answer)
         accepted_fields.append(field)
 
-    # Run the same Gemini interview consistency checkpoint used before confirmation.
+    # Run the same LLM interview consistency checkpoint used before confirmation.
     consistency = client.review_interview(case)
     if consistency.verdict != "pass" or consistency.issues:
         raise RuntimeError(
-            "Gemini consistency checkpoint requested clarification: "
+            "LLM consistency checkpoint requested clarification: "
             + json.dumps(consistency.model_dump(mode="json"), ensure_ascii=False)
         )
 
@@ -149,7 +149,7 @@ def main() -> None:
             continue
         used_local_fallback = str(candidate.get("model_status", "")).startswith("local draft fallback")
         was_locally_replaced = any(
-            "טיוטת Gemini לא עברה" in item for item in candidate.get("warnings", [])
+            "טיוטת המודל לא עברה" in item for item in candidate.get("warnings", [])
         )
         if used_local_fallback or was_locally_replaced:
             rejected_draft_attempts += 1
@@ -173,7 +173,7 @@ def main() -> None:
             case,
         )
         raise RuntimeError(
-            f"No native Gemini draft passed local validation after {rejected_draft_attempts} attempts. "
+            f"No provider-generated draft passed local validation after {rejected_draft_attempts} attempts. "
             + "Latest raw-draft issues: "
             + json.dumps(diagnostic_issues, ensure_ascii=False)
         )
@@ -206,7 +206,7 @@ def main() -> None:
                 "estimated_fee": str(validation.filing_fee),
                 "authority_ids": sorted(authority_ids),
                 "draft_model": result.get("model_status"),
-                "rejected_gemini_draft_attempts": rejected_draft_attempts,
+                "rejected_provider_draft_attempts": rejected_draft_attempts,
                 "draft_review": result.get("draft_review", {}).get("verdict", "missing"),
                 "local_draft_validation": "pass",
                 "pdf_pages": page_count,

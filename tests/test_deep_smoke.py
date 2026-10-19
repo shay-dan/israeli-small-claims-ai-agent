@@ -323,7 +323,10 @@ def test_streamlit_online_course_reaches_confirmation_without_loop(monkeypatch):
 
     from streamlit.testing.v1 import AppTest
 
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # Keep UI tests deterministic even when the developer has real provider
+    # credentials in .env. load_dotenv() must not activate live API calls here.
+    for key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.setenv(key, "")
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     messages = (
         (
@@ -367,7 +370,10 @@ def test_streamlit_restaurant_duplicate_charge_keeps_only_excess_amount(monkeypa
 
     from streamlit.testing.v1 import AppTest
 
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # Keep UI tests deterministic even when the developer has real provider
+    # credentials in .env. load_dotenv() must not activate live API calls here.
+    for key in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.setenv(key, "")
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "app.py", default_timeout=20).run()
     messages = (
         "במסעדה חויבתי פעמיים על ארוחה ושילמתי בסך הכול 20000 שקל במקום 10000 שקל",

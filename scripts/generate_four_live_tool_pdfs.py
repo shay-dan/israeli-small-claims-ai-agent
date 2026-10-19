@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from small_claims_agent.graph import build_graph, initial_state
 from small_claims_agent.interview import apply_chat_answer, confirmation_is_yes, seed_case_from_opening
-from small_claims_agent.llm import GeminiAgentClient
+from small_claims_agent.llm import LLMGateway
 from small_claims_agent.models import CaseData
 from small_claims_agent.pdf_export import markdown_to_pdf_bytes
 from small_claims_agent.validators import validate_case, validate_draft
@@ -238,7 +238,7 @@ def _preserve_opening_facts(local_case: CaseData, extracted_case: CaseData) -> C
     return extracted_case
 
 
-def _run_scenario(graph, client: GeminiAgentClient, scenario: Scenario) -> tuple[bytes, dict]:
+def _run_scenario(graph, client: LLMGateway, scenario: Scenario) -> tuple[bytes, dict]:
     local_case = seed_case_from_opening(scenario.opening)
     opening_state = initial_state(local_case)
     opening_state["last_user_message"] = scenario.opening
@@ -290,7 +290,7 @@ def _run_scenario(graph, client: GeminiAgentClient, scenario: Scenario) -> tuple
             {"configurable": {"thread_id": f"{scenario.slug}-draft-{uuid.uuid4()}"}},
         )
         used_fallback = str(candidate.get("model_status", "")).startswith("local draft fallback")
-        replaced = any("טיוטת Gemini לא עברה" in item for item in candidate.get("warnings", []))
+        replaced = any("טיוטת המודל לא עברה" in item for item in candidate.get("warnings", []))
         review_passed = candidate.get("draft_review", {}).get("verdict") == "pass"
         if candidate.get("validation_errors") or used_fallback or replaced or not review_passed:
             rejected_attempts += 1
@@ -298,7 +298,7 @@ def _run_scenario(graph, client: GeminiAgentClient, scenario: Scenario) -> tuple
         result = candidate
         break
     if result is None:
-        raise RuntimeError(f"{scenario.slug}: no native Gemini draft passed in 3 attempts")
+        raise RuntimeError(f"{scenario.slug}: no provider-generated draft passed in 3 attempts")
 
     authority_ids = frozenset(item["id"] for item in result.get("authorities", []))
     if authority_ids != scenario.expected_authorities:
@@ -340,9 +340,9 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     load_dotenv(PROJECT_ROOT / ".env")
-    client = GeminiAgentClient()
+    client = LLMGateway()
     if not client.available:
-        raise RuntimeError("GEMINI_API_KEY is missing; refusing to create live-tool outputs")
+        raise RuntimeError("No provider API key is configured; refusing to create live-tool outputs")
     graph = build_graph(client)
 
     output_dir = PROJECT_ROOT / "output" / "pdf"
