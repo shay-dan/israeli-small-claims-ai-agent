@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import re
 import subprocess
@@ -139,7 +140,8 @@ class SmokeRunner:
         )
         total = len(self.results)
         passed = sum(item.status == "PASS" for item in self.results)
-        failed = total - passed
+        failed = sum(item.status == "FAIL" for item in self.results)
+        skipped = sum(item.status == "SKIP" for item in self.results)
         lines = [
             "# Comprehensive Smoke Test Report",
             "",
@@ -149,18 +151,21 @@ class SmokeRunner:
             f"- Total checks: **{total}**",
             f"- Passed: **{passed}**",
             f"- Failed: **{failed}**",
+            f"- Skipped: **{skipped}**",
             f"- Overall: **{'PASS' if failed == 0 else 'FAIL'}**",
             "",
             "## Summary by section",
             "",
-            "| Section | Passed | Failed | Total |",
-            "|---|---:|---:|---:|",
+            "| Section | Passed | Failed | Skipped | Total |",
+            "|---|---:|---:|---:|---:|",
         ]
         sections = list(dict.fromkeys(item.section for item in self.results))
         for section in sections:
             rows = [item for item in self.results if item.section == section]
             section_passed = sum(item.status == "PASS" for item in rows)
-            lines.append(f"| {section} | {section_passed} | {len(rows) - section_passed} | {len(rows)} |")
+            section_failed = sum(item.status == "FAIL" for item in rows)
+            section_skipped = sum(item.status == "SKIP" for item in rows)
+            lines.append(f"| {section} | {section_passed} | {section_failed} | {section_skipped} | {len(rows)} |")
         failures = [item for item in self.results if item.status == "FAIL"]
         lines.extend(["", "## Failures requiring attention", ""])
         if not failures:
@@ -479,13 +484,21 @@ def run_places_and_parties(runner: SmokeRunner) -> None:
         )
     restaurant = CaseData(incident_place="מסעדת יוסי ובניו, קניון מלחה ירושלים")
     for index, answer in enumerate(("כתבתי קודם", "אותו דבר"), start=25):
+        def require_explicit_name_confirmation(answer=answer):
+            try:
+                return apply_chat_answer(
+                    restaurant, "defendant.full_name", answer
+                ).defendant.full_name
+            except InterviewAnswerError as exc:
+                return str(exc)
+
         runner.check(
             "Places and parties",
             f"P{index:02d}",
-            f"Reuse restaurant business name via {answer}",
-            "מסעדת יוסי ובניו",
-            lambda answer=answer: apply_chat_answer(restaurant, "defendant.full_name", answer).defendant.full_name,
-            lambda value: value == "מסעדת יוסי ובניו",
+            f"Require confirmation before reusing restaurant name via {answer}",
+            "explicitly asks whether the candidate is מסעדת יוסי ובניו",
+            require_explicit_name_confirmation,
+            lambda value: "מסעדת יוסי ובניו" in value and "האם התכוונתם" in value,
         )
 
 
@@ -966,7 +979,9 @@ def run_streamlit(runner: SmokeRunner) -> None:
         )
         if preview_button:
             preview_button.click().run()
-            content = app.session_state["messages"][-1]["content"]
+            content = "\n".join(
+                item["content"] for item in app.session_state["messages"][-3:]
+            )
             runner.check(
                 "Streamlit UI",
                 "U05",
@@ -1067,10 +1082,6 @@ def run_pytest(runner: SmokeRunner) -> None:
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", "-q"],
         cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=180,
     )
     runner.check(
@@ -1078,7 +1089,7 @@ def run_pytest(runner: SmokeRunner) -> None:
         "T01",
         "Run complete pytest suite",
         "exit code 0",
-        lambda: {"exit_code": completed.returncode, "tail": completed.stdout.strip().splitlines()[-2:]},
+        lambda: {"exit_code": completed.returncode},
         lambda value: value["exit_code"] == 0,
     )
 
@@ -1086,8 +1097,26 @@ def run_pytest(runner: SmokeRunner) -> None:
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="Run the deterministic and optional live comprehensive smoke suite.")
+    parser.add_argument(
+        "--skip-pytest",
+        action="store_true",
+        help="Skip the nested pytest run when the regression suite was run separately.",
+    )
+    parser.add_argument(
+        "--skip-live",
+        action="store_true",
+        help="Skip direct live gateway checks; provider-specific live checks can be run with live_provider_matrix.py.",
+    )
+    args = parser.parse_args()
+    load_dotenv(ROOT / ".env")
     runner = SmokeRunner()
-    run_pytest(runner)
+    if args.skip_pytest:
+        runner.results.append(
+            Result("Automated regression suite", "T01", "Run complete pytest suite", "SKIP", "already run separately", "skipped by CLI", 0)
+        )
+    else:
+        run_pytest(runner)
     run_openings(runner)
     run_dates(runner)
     run_places_and_parties(runner)
@@ -1096,7 +1125,12 @@ def main() -> int:
     run_preview_corrections_privacy(runner)
     run_validation_legal_drafts_pdfs(runner)
     run_streamlit(runner)
-    run_live_gateway(runner)
+    if args.skip_live:
+        runner.results.append(
+            Result("Live LLM gateway", "A00", "Live provider calls", "SKIP", "live checks requested", "skipped by CLI", 0)
+        )
+    else:
+        run_live_gateway(runner)
     metadata = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
         "python": sys.version.split()[0],

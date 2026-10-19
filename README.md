@@ -27,28 +27,39 @@ The interface and generated claim are in Hebrew because the target workflow is t
 ## Architecture
 
 ```mermaid
-flowchart LR
-    UI[Streamlit chat] --> Interview[Deterministic interview parser]
-    Interview --> State[Pydantic CaseData state]
-    State --> Graph[LangGraph workflow]
-    Graph --> Gateway[LLM gateway]
-    Gateway --> Groq[Groq]
-    Groq -. provider failure .-> Router[OpenRouter free router]
-    Router -. provider failure .-> Gemini[Gemini Flash]
-    Gemini -. all providers unavailable .-> Local[Deterministic local fallback]
-    Gateway --> Extract[Structured extraction]
-    Graph --> Validate[Local validation]
-    Validate --> RAG[Targeted JSON RAG]
-    RAG --> Draft[Draft generation]
-    Draft --> QA[LLM review + local checks]
-    QA --> Edit[Editable Markdown]
-    Edit --> DraftCompare[Pre-export interview comparison]
-    DraftCompare -->|Up to 3 material questions| Chat[User clarification]
-    Chat --> DraftCompare
-    DraftCompare -->|No issue or provider unavailable| PDF[RTL PDF export]
+flowchart TD
+    Start([One graph run starts]) --> Extract[1. Extract facts from the new message]
+    Extract --> Validate[2. Validate CaseData locally]
+    Validate --> Complete{Ready to draft?}
+    Complete -->|No: missing fields, validation issue, or draft not requested| Clarify[Return the next question or issue]
+    Clarify --> Wait([Streamlit shows the question and waits])
+    Wait -. Next user reply .-> Start
+    Complete -->|Yes| Retrieve[3. Retrieve relevant legal sources]
+    Retrieve --> Draft[4. Generate the draft]
+    Draft --> DraftCheck[5. Check draft against local rules]
+    DraftCheck --> DraftValid{Draft passes local checks?}
+    DraftValid -->|No| Clarify
+    DraftValid -->|Yes| Review[6. LLM quality review]
+    Review --> Return([Return draft and diagnostics to Streamlit])
 ```
 
-LangGraph owns the model-facing workflow: extraction, clarification routing, retrieval, drafting, and review. Before export, a separate bounded comparison checks the final draft against the confirmed interview and can ask up to three evidence-anchored questions; local validation handles identity and address fields without sending them to an LLM. If the provider is unavailable, the app continues with local checks and shows a warning. The conversational interview itself is deliberately deterministic so a model failure cannot erase accepted answers or trap the user in an uncontrolled agent loop.
+The diamonds are conditional routes, not parallel branches. If the case is incomplete, LangGraph returns a question to Streamlit and ends that run; it does not continue to retrieval or drafting. The next user reply updates the saved `CaseData` and starts a new run. Once the case is ready, the graph follows the drafting path. A draft that fails local checks is routed back to clarification; a valid draft goes to the LLM review and returns to the UI.
+
+LLM-provider fallback is a separate flow from the case workflow:
+
+```mermaid
+flowchart LR
+    Node[LLM-backed graph step] --> Gateway[Provider-neutral LLM gateway]
+    Gateway --> Groq[Groq]
+    Groq -->|Success| Result([Return structured result])
+    Groq -. Retryable provider failure .-> OpenRouter[OpenRouter]
+    OpenRouter -->|Success| Result
+    OpenRouter -. Retryable provider failure .-> Gemini[Gemini]
+    Gemini -->|Success| Result
+    Gemini -. All providers unavailable .-> Local[Deterministic local fallback]
+```
+
+After LangGraph returns a reviewed draft, Streamlit runs a separate, bounded comparison against the confirmed interview before enabling PDF export. It may ask up to three evidence-anchored questions; this pre-export check is outside the graph shown above. Local validation handles identity and address fields without sending them to an LLM. If all providers are unavailable, the app continues with deterministic local behavior and shows a warning. The conversational interview itself is deliberately deterministic so a model failure cannot erase accepted answers or trap the user in an uncontrolled agent loop.
 
 ## Main technology choices
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import re
 import subprocess
@@ -921,25 +922,29 @@ def run_live_gateway(runner: AuditRunner) -> None:
             )
 
 
-def run_existing_suites(runner: AuditRunner) -> None:
-    completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=240,
-    )
-    runner.check(
-        "Existing regression baseline",
-        "B01",
-        "Full pytest suite remains green",
-        "exit code 0",
-        lambda: {"exit_code": completed.returncode, "tail": completed.stdout.strip().splitlines()[-2:]},
-        lambda value: value["exit_code"] == 0,
-        severity="high",
-    )
+def run_existing_suites(runner: AuditRunner, skip_pytest: bool = False) -> None:
+    if skip_pytest:
+        runner.results.append(
+            AuditResult(
+                "Existing regression baseline", "B01", "Full pytest suite remains green",
+                "SKIP", "high", "already run separately", "skipped by CLI", 0
+            )
+        )
+    else:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q"],
+            cwd=ROOT,
+            timeout=240,
+        )
+        runner.check(
+            "Existing regression baseline",
+            "B01",
+            "Full pytest suite remains green",
+            "exit code 0",
+            lambda: {"exit_code": completed.returncode},
+            lambda value: value["exit_code"] == 0,
+            severity="high",
+        )
     smoke_path = ROOT / "output" / "smoke_test_results.json"
     runner.check(
         "Existing regression baseline",
@@ -955,8 +960,13 @@ def run_existing_suites(runner: AuditRunner) -> None:
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description="Run the deep adversarial audit suite.")
+    parser.add_argument("--skip-pytest", action="store_true", help="Use after running pytest separately.")
+    parser.add_argument("--skip-live", action="store_true", help="Skip live LLM calls; run them separately with provider scripts.")
+    args = parser.parse_args()
+    load_dotenv(ROOT / ".env")
     runner = AuditRunner()
-    run_existing_suites(runner)
+    run_existing_suites(runner, skip_pytest=args.skip_pytest)
     run_opening_matrix(runner)
     run_date_and_identity_matrix(runner)
     run_contact_and_damage_matrix(runner)
@@ -965,7 +975,15 @@ def main() -> int:
     run_edit_integrity(runner)
     run_limits_and_fallbacks(runner)
     run_pdf_checks(runner)
-    run_live_gateway(runner)
+    if args.skip_live:
+        runner.results.append(
+            AuditResult(
+                "Live LLM gateway reliability", "L00", "Live provider calls",
+                "SKIP", "high", "live checks requested", "skipped by CLI", 0
+            )
+        )
+    else:
+        run_live_gateway(runner)
     runner.write()
     passed = sum(item.status == "PASS" for item in runner.results)
     skipped = sum(item.status == "SKIP" for item in runner.results)
