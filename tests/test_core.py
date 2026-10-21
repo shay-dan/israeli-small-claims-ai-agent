@@ -41,7 +41,7 @@ from small_claims_agent.interview import (
     question_for,
     seed_case_from_opening,
 )
-from small_claims_agent.legal import classify_category, retrieve_authorities, retrieve_authorities_for_case
+from small_claims_agent.legal import classify_category, load_authorities, retrieve_authorities, retrieve_authorities_for_case
 from small_claims_agent.courts import locality_from_text, parse_address, resolve_jurisdiction
 from small_claims_agent.llm import (
     DemoAgentClient,
@@ -2175,8 +2175,45 @@ def test_ai_source_report_contains_retrieved_sources_and_quality_findings():
         assert record.quote_he in report
         assert record.source_url in report
     assert "נוסח מאוחד ציבורי (אינו מקור רשמי)" in report
+    assert "קישור אימות רשמי" in report
     assert "תמצית שמורה" in report
     assert markdown_to_pdf_bytes(report, title="דו״ח מקורות ובקרת איכות").startswith(b"%PDF")
+
+
+def test_warranty_regulation_source_uses_current_official_verification_page():
+    records = {record.id: record for record in load_authorities()}
+    warranty = records["consumer-warranty-regulations"]
+
+    assert warranty.source_kind == "public_consolidation"
+    assert "wikisource.org" in warranty.source_url
+    assert warranty.verification_url == "https://www.gov.il/he/pages/warranty"
+    assert warranty.verified_at == "2026-10-21"
+
+
+def test_legal_kb_uses_actual_entry_into_force_dates_and_official_verification_links():
+    records = {record.id: record for record in load_authorities()}
+    expected_dates = {
+        "sale-law-11": "1968-10-01",
+        "contracts-remedies-2": "1971-03-27",
+        "contracts-remedies-9": "1971-03-27",
+        "contracts-remedies-10": "1971-03-27",
+        "contracts-remedies-13": "1971-03-27",
+        "consumer-warranty-regulations": "2006-09-19",
+        "rent-loan-7": "1972-01-01",
+        "rent-loan-25i-e": "2017-09-17",
+    }
+
+    assert {record_id: record.effective_date for record_id, record in records.items()} == expected_dates
+    for record_id in expected_dates:
+        assert records[record_id].verified_at == "2026-10-21"
+    for record_id in (
+        "contracts-remedies-2",
+        "contracts-remedies-9",
+        "contracts-remedies-10",
+        "contracts-remedies-13",
+    ):
+        assert "lawitemid=2000293" in records[record_id].verification_url
+    assert "lawitemid=2000596" in records["rent-loan-25i-e"].verification_url
 
 
 def test_unrelated_sports_comments_are_not_relevant_resolution_attempts():

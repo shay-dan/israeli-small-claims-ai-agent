@@ -385,7 +385,7 @@ def compose_source_report_markdown(
                     f"- **{excerpt_label}:** {authority.quote_he}",
                     f"- **קישור למקור:** {authority.source_url}",
                     *(
-                        [f"- **אסמכתה ממשלתית מאמתת:** {authority.verification_url}"]
+                        [f"- **קישור אימות רשמי:** {authority.verification_url}"]
                         if authority.verification_url
                         else []
                     ),

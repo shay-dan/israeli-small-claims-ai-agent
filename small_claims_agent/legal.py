@@ -42,6 +42,13 @@ def retrieve_authorities_for_case(case: CaseData, path: Path = KB_PATH) -> list[
                 "טאבלט",
                 "תנור",
                 "שואב אבק",
+                "טוסטר",
+                "קומקום חשמלי",
+                "מיקרוגל",
+                "בלנדר",
+                "מיקסר",
+                "מכונת קפה",
+                "כיריים",
                 "מכשיר חשמלי",
                 "מכשיר אלקטרוני",
             )
@@ -56,12 +63,22 @@ def retrieve_authorities_for_case(case: CaseData, path: Path = KB_PATH) -> list[
         selected.append("contracts-remedies-2")
     elif case.category == ClaimCategory.LANDLORD_TENANT:
         rental_text = f"{case.product_or_service_details} {case.event_summary}".lower()
-        if any(word in rental_text for word in ("פיקדון", "ערובה")) and any(
-            phrase in rental_text
-            for phrase in ("לא החזיר", "מסרב להחזיר", "סירב להחזיר", "השבת הפיקדון")
+        has_residential_premises = any(
+            word in rental_text for word in ("דירה", "דירת מגורים", "שכירות למגורים")
+        )
+        if (
+            has_residential_premises
+            and any(word in rental_text for word in ("פיקדון", "ערובה"))
+            and any(
+                phrase in rental_text
+                for phrase in ("לא החזיר", "מסרב להחזיר", "סירב להחזיר", "השבת הפיקדון")
+            )
         ):
             selected.append("rent-loan-25i-e")
-        elif any(word in rental_text for word in ("ליקוי", "פגם", "תיקון", "לתקן")):
+        if any(
+            word in rental_text
+            for word in ("ליקוי", "פגם", "תיקון", "לתקן", "תיקן", "תיקנה", "תיקנו", "לא תוקן")
+        ):
             selected.append("rent-loan-7")
         selected.append("contracts-remedies-2")
     else:
@@ -83,6 +100,21 @@ def classify_category(text: str, current: ClaimCategory = ClaimCategory.UNSUPPOR
     if current != ClaimCategory.UNSUPPORTED:
         return current
     normalized = text.lower()
+    if any(
+        word in normalized
+        for word in (
+            "שכירות",
+            "משכיר",
+            "שוכר",
+            "שכר דירה",
+            "פיקדון",
+            "דירה שכורה",
+            "דירה מושכרת",
+            "שכרתי דירה",
+            "שכרתי את הדירה",
+        )
+    ):
+        return ClaimCategory.LANDLORD_TENANT
     if any(
         word in normalized
         for word in (
@@ -108,7 +140,7 @@ def classify_category(text: str, current: ClaimCategory = ClaimCategory.UNSUPPOR
         )
     ):
         return ClaimCategory.SERVICE_CONTRACT
-    if any(word in normalized for word in ("שכירות", "משכיר", "שוכר", "שכרתי", "פיקדון")):
+    if "שכרתי" in normalized:
         return ClaimCategory.LANDLORD_TENANT
     if any(word in normalized for word in ("מזגן", "מוצר", "קניתי", "רכשתי", "חנות")):
         return ClaimCategory.CONSUMER_PRODUCT

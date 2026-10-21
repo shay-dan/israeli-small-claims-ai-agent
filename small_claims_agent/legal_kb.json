@@ -8,20 +8,21 @@
     "source_url": "https://fs.knesset.gov.il/6/law/6_lsr_208564.PDF",
     "source_kind": "official_primary",
     "excerpt_kind": "summary",
-    "effective_date": "1968-07-19",
-    "verified_at": "2026-08-18"
+    "effective_date": "1968-10-01",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "contracts-remedies-9",
     "categories": ["consumer_product", "service_contract", "landlord_tenant"],
     "law_name": "חוק החוזים (תרופות בשל הפרת חוזה), התשל״א-1970",
     "section": "9",
-    "quote_he": "משבוטל החוזה, חייב המפר להשיב לנפגע מה שקיבל על פי החוזה, והנפגע חייב להשיב למפר מה שקיבל, בכפוף להוראות הסעיף.",
+    "quote_he": "משבוטל החוזה, חייב המפר להשיב לנפגע מה שקיבל על פי החוזה.",
     "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
     "source_kind": "official_primary",
     "excerpt_kind": "quote",
-    "effective_date": "1970-12-24",
-    "verified_at": "2026-08-18"
+    "verification_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000293",
+    "effective_date": "1971-03-27",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "contracts-remedies-2",
@@ -32,8 +33,9 @@
     "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
     "source_kind": "official_primary",
     "excerpt_kind": "quote",
-    "effective_date": "1970-12-24",
-    "verified_at": "2026-08-18"
+    "verification_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000293",
+    "effective_date": "1971-03-27",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "consumer-warranty-regulations",
@@ -44,9 +46,9 @@
     "source_url": "https://he.wikisource.org/wiki/תקנות_הגנת_הצרכן_(אחריות_ושירות_לאחר_מכירה)",
     "source_kind": "public_consolidation",
     "excerpt_kind": "summary",
-    "verification_url": "https://www.gov.il/BlobFolder/reports/pfta_annual_reports/he/docs_cpfta_AnnualRepot2012.pdf",
-    "effective_date": "2006-09-18",
-    "verified_at": "2026-10-10"
+    "verification_url": "https://www.gov.il/he/pages/warranty",
+    "effective_date": "2006-09-19",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "contracts-remedies-10",
@@ -57,8 +59,9 @@
     "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
     "source_kind": "official_primary",
     "excerpt_kind": "quote",
-    "effective_date": "1970-12-24",
-    "verified_at": "2026-08-18"
+    "verification_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000293",
+    "effective_date": "1971-03-27",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "contracts-remedies-13",
@@ -69,8 +72,9 @@
     "source_url": "https://fs.knesset.gov.il/7/law/7_lsr_211750.pdf",
     "source_kind": "official_primary",
     "excerpt_kind": "quote",
-    "effective_date": "1970-12-24",
-    "verified_at": "2026-08-18"
+    "verification_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000293",
+    "effective_date": "1971-03-27",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "rent-loan-7",
@@ -81,19 +85,20 @@
     "source_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000596",
     "source_kind": "official_primary",
     "excerpt_kind": "summary",
-    "effective_date": "2026-03-31",
-    "verified_at": "2026-08-18"
+    "effective_date": "1972-01-01",
+    "verified_at": "2026-10-21"
   },
   {
     "id": "rent-loan-25i-e",
     "categories": ["landlord_tenant"],
     "law_name": "חוק השכירות והשאילה, התשל״א-1971",
     "section": "25י(ה)",
-    "quote_he": "הסתיימה תקופת השכירות, ישיב המשכיר לשוכר את הערובה או את יתרתה לאחר המימוש, לרבות פירותיה, בתוך 60 ימים ממועד השבת הדירה המושכרת לרשותו או עד למועד שבו נפרעו חובות השוכר שבגינם ניתן לממש את הערובה, לפי המאוחר.",
+    "quote_he": "הסתיימה תקופת השכירות, ישיב המשכיר לשוכר את הערובה או את יתרתה לאחר המימוש לפי סעיף קטן (ג), לרבות פירותיה, בתוך 60 ימים ממועד השבת הדירה המושכרת לרשותו או עד למועד שבו נפרעו חובות השוכר כאמור בסעיף קטן (ג), לפי המאוחר.",
     "source_url": "https://fs.knesset.gov.il/20/law/20_lsr_389390.pdf",
     "source_kind": "official_primary",
     "excerpt_kind": "quote",
+    "verification_url": "https://main.knesset.gov.il/Activity/Legislation/Laws/pages/lawprimary.aspx?lawitemid=2000596",
     "effective_date": "2017-09-17",
-    "verified_at": "2026-08-24"
+    "verified_at": "2026-10-21"
   }
 ]

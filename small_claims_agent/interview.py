@@ -1076,7 +1076,8 @@ def prior_attempt_has_outcome(text: str) -> bool:
             r"(?:אמרו|נאמר|השיבו|השיבה|השיב)\s+לי|"
             r"(?:ו?אמרו|נאמר|השיבו|השיבה|השיב)\s+(?:לי\s+)?(?:ש)?(?:אין|לא)|"
             r"אין\s+(?:החזר|החזרים|החזרות|זיכוי|פיצוי|פיצויים)|"
-            r"לא\s+(?:מחזיר|מחזירים|מחזירה|מזכה|מזכים|מפצה|מפצים)|"
+            r"לא\s+(?:מחזיר|מחזירים|מחזירה|מזכה|מזכים|מפצה|מפצים|"
+            r"תיקן|תיקנה|תיקנו|החליף|החליפה|החליפו|השיב|השיבה|השיבו)|"
             r"סירב|סירבה|סירבו|התנער|התנערה|התנערו|מתנער|מתנערת|מתנערים|"
             r"האשימ|מאשימ|לא\s+ענו|לא\s+קיבל(?:תי|נו)?\s+תשובה|לא\s+נענה|לא\s+נענתה|לא\s+אחרא|"
             r"לא\s+מוכנ|דחה|דחתה|דחו|סירבו?\s+.*(?:זיכוי|לזכות|להחזיר|לתקן)",
@@ -1187,6 +1188,26 @@ def parse_damage_items(answer: str, known_transaction_amount: Decimal | None = N
     for confirmation in DAMAGE_CONFIRMATIONS:
         parseable_answer = re.sub(re.escape(confirmation), "", parseable_answer, flags=re.IGNORECASE)
     lines = [line.strip() for line in re.split(r"[;\n]+", parseable_answer) if line.strip()]
+    explicitly_repeated_purchase_price = False
+    if known_transaction_amount:
+        for candidate_line in lines:
+            candidate_amounts = [
+                _decimal_from_match(match.group())
+                for match in re.finditer(r"(?<![\d.])\d[\d,]*(?:\.\d+)?(?![\d.])", candidate_line)
+            ]
+            names_purchase_price = any(
+                marker in candidate_line for marker in ("מחיר", "מוצר", "השבת התמורה", "תמורה", "עלות")
+            )
+            names_non_pecuniary = any(
+                marker in candidate_line for marker in ("עוגמת", "עגמת", "טרחה", "נפש")
+            )
+            if (
+                known_transaction_amount in candidate_amounts
+                and names_purchase_price
+                and not names_non_pecuniary
+            ):
+                explicitly_repeated_purchase_price = True
+                break
     items: list[DamageItem] = []
     for line in lines:
         matches = list(re.finditer(r"(?<![\d.])\d[\d,]*(?:\.\d+)?(?![\d.])", line))
@@ -1199,6 +1220,7 @@ def parse_damage_items(answer: str, known_transaction_amount: Decimal | None = N
         if (
             len(amounts) == 1
             and known_transaction_amount
+            and not explicitly_repeated_purchase_price
             and describes_non_pecuniary
             and (
                 (extra_marker and extra_marker.end() <= matches[0].start())

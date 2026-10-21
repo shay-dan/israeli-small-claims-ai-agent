@@ -1,0 +1,77 @@
+{
+  "suite_id": "case-flow-eval-v1",
+  "created_at": "2026-10-21",
+  "description": "Synthetic end-to-end chat-to-draft cases. Tests the local deterministic interview and drafting path; no external LLM/provider calls or real personal data.",
+  "defaults": {
+    "transaction_date": "01.03.2026",
+    "incident_date": "04.03.2026",
+    "incident_place": "חנות ברחוב הדוגמה 10, תל אביב",
+    "product_or_service_details": "מוצר או שירות לפי המקרה",
+    "defendant.full_name": "עסק לדוגמה בע״מ",
+    "defendant_role": "מוכר",
+    "defendant.identifier": "לא ידוע",
+    "defendant.address": "רחוב הדוגמה 10, תל אביב",
+    "defendant.phone": "לא ידוע",
+    "prior_attempts": "התקשרתי פעם אחת לנתבעת בנושא המחלוקת והיא סירבה לתת פתרון.",
+    "damage_items": "השבת מחיר העסקה 1000",
+    "primary_remedy": "החזר כספי",
+    "alternative_remedy": "אין",
+    "warranty_details": "לא ידוע",
+    "evidence_confirmation": "מסמך העסקה ותכתובת עם בית העסק",
+    "claimant.full_name": "תובע לדוגמה",
+    "claimant.identifier": "000000001",
+    "claimant.address": "רחוב הדגמה 1, תל אביב",
+    "claimant.phone": "0000000000",
+    "claimant.email": "אין"
+  },
+  "cases": [
+    {
+      "id": "consumer_appliance_failure_refund",
+      "opening": "קניתי מזגן ב3200 שקל, אחרי שבועיים הוא הפסיק לעבוד.",
+      "answers": {"product_or_service_details":"מזגן","damage_items":"השבת מחיר המזגן 3200","primary_remedy":"החזר כספי"},
+      "expected": {"category":"consumer_product","claim_total":3200,"authority_ids":["sale-law-11","contracts-remedies-2","consumer-warranty-regulations","contracts-remedies-9"],"draft_contains":["3,200 ₪","מזגן","תיאור המקרה","ניסיונות ליישוב המחלוקת"],"draft_must_not_contain":["סוגי התרופות","[PLAINTIFF_","[DEFENDANT_"]}
+    },
+    {
+      "id": "consumer_laptop_arrived_broken",
+      "opening": "קניתי מחשב נייד ב4000 שקל, פתחתי את הקופסה וראיתי שהמסך שבור.",
+      "answers": {"product_or_service_details":"מחשב נייד","damage_items":"השבת מחיר המחשב 4000","primary_remedy":"החלפה"},
+      "expected": {"category":"consumer_product","claim_total":4000,"authority_ids":["sale-law-11","contracts-remedies-2","consumer-warranty-regulations"],"draft_contains":["4,000 ₪","מחשב נייד","תיאור המקרה"],"draft_must_not_contain":["המסך נשבר אצל התובע","הנתבעת הודתה באחריות"]}
+    },
+    {
+      "id": "consumer_toaster_statutory_threshold",
+      "opening": "קניתי טוסטר ב151 שקל והוא התקלקל אחרי יום.",
+      "answers": {"product_or_service_details":"טוסטר","damage_items":"השבת מחיר הטוסטר 151","primary_remedy":"תיקון"},
+      "expected": {"category":"consumer_product","claim_total":151,"authority_ids":["sale-law-11","contracts-remedies-2","consumer-warranty-regulations"],"draft_contains":["151 ₪","טוסטר"],"draft_must_not_contain":["אחריות לשנה קיימת"]}
+    },
+    {
+      "id": "consumer_multiple_damage_components",
+      "opening": "קניתי מזגן ב3200 שקל והוא התקלקל אחרי שבוע.",
+      "answers": {"product_or_service_details":"מזגן","damage_items":"השבת מחיר המוצר 3200\nעוגמת נפש 800","primary_remedy":"ביטול עסקה והחזר כספי"},
+      "expected": {"category":"consumer_product","claim_total":4000,"authority_ids":["sale-law-11","contracts-remedies-2","consumer-warranty-regulations","contracts-remedies-9","contracts-remedies-13"],"draft_contains":["4,000 ₪","3,200 ₪","800 ₪"],"draft_must_not_contain":["5,200 ₪"]}
+    },
+    {
+      "id": "service_course_cancellation",
+      "opening": "שילמתי 20000 שקל על קורס לימודים, ביקשתי לבטל אחרי יומיים והחברה סירבה להחזיר את הכסף.",
+      "answers": {"incident_place":"עסקה באינטרנט באתר Course של החברה","product_or_service_details":"קורס לימודים מקוון","defendant.full_name":"קורסים לדוגמה בע״מ","defendant_role":"נותן שירות","defendant.address":"רחוב הדוגמה 20, תל אביב","prior_attempts":"שלחתי הודעת דוא״ל לחברה וביקשתי ביטול, והחברה סירבה להחזיר את הכסף.","damage_items":"השבת תשלום הקורס 20000","primary_remedy":"ביטול עסקה והחזר כספי"},
+      "expected": {"category":"service_contract","claim_total":20000,"authority_ids":["contracts-remedies-2","contracts-remedies-9"],"draft_contains":["20,000 ₪","קורסים לדוגמה בע״מ","קורס"],"draft_must_not_contain":["חוק המכר","תקנות הגנת הצרכן (אחריות"]}
+    },
+    {
+      "id": "service_duplicate_charge_partial_claim",
+      "opening": "חויבתי פעמיים על מנוי שירות, בסך כולל של 20000 שקל.",
+      "answers": {"product_or_service_details":"מנוי שירות","defendant_role":"נותן שירות","damage_items":"החזר חיוב כפול 10000","primary_remedy":"החזר כספי"},
+      "expected": {"category":"service_contract","claim_total":10000,"authority_ids":["contracts-remedies-2","contracts-remedies-9"],"draft_contains":["10,000 ₪","מנוי שירות"],"draft_must_not_contain":["20,000 ₪"]}
+    },
+    {
+      "id": "residential_rental_unreturned_deposit",
+      "opening": "שכרתי דירה בירושלים, שילמתי פיקדון 5000 שקל, ולאחר סיום השכירות המשכיר מסרב להחזיר אותו.",
+      "answers": {"incident_place":"דירה שכורה ברחוב הדוגמה 5, ירושלים","product_or_service_details":"דירה שכורה ופיקדון","defendant_role":"משכיר","defendant.address":"רחוב הדוגמה 5, ירושלים","prior_attempts":"פניתי למשכיר בטלפון וביקשתי את החזרת הפיקדון, והוא סירב.","damage_items":"השבת פיקדון 5000","primary_remedy":"החזר כספי"},
+      "expected": {"category":"landlord_tenant","claim_total":5000,"authority_ids":["rent-loan-25i-e","contracts-remedies-2","contracts-remedies-9"],"draft_contains":["5,000 ₪","פיקדון","ירושלים"],"draft_must_not_contain":["consumer-warranty-regulations"]}
+    },
+    {
+      "id": "residential_rental_repair_and_expense",
+      "opening": "שכרתי דירה בתל אביב, הייתה נזילה חמורה שהמשכיר לא תיקן אחרי שפניתי, ושילמתי 900 שקל לבעל מקצוע.",
+      "answers": {"incident_place":"דירה ברחוב הדוגמה 10, תל אביב","product_or_service_details":"דירה שכורה עם נזילה","defendant_role":"משכיר","prior_attempts":"שלחתי הודעה למשכיר וביקשתי לתקן את הנזילה, והוא לא תיקן.","damage_items":"עלות תיקון הנזילה 900","primary_remedy":"תיקון"},
+      "expected": {"category":"landlord_tenant","claim_total":900,"authority_ids":["rent-loan-7","contracts-remedies-2"],"draft_contains":["900 ₪","נזילה","תיקון"],"draft_must_not_contain":["rent-loan-25i-e"]}
+    }
+  ]
+}
