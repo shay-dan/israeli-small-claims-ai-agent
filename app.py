@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from small_claims_agent import interview as interview_module
 from small_claims_agent import llm as llm_module
+from small_claims_agent.bug_reports import BugReport, BugReportStoreError, submit_bug_report
 
 # Streamlit may hot-reload this file while retaining an older cached helper
 # module. Reload once when a newly added public helper is missing.
@@ -94,7 +95,10 @@ from small_claims_agent.validators import (
 )
 
 
-load_dotenv()
+# Local PostgreSQL settings are isolated from the app/API-key .env file.
+# Process environment still takes precedence over both files.
+load_dotenv(".env.postgres", override=False)
+load_dotenv(override=False)
 st.set_page_config(page_title="סוכן תביעות קטנות", page_icon="⚖️", layout="centered")
 st.markdown(
     """
@@ -153,6 +157,111 @@ def record_diagnostic(event: str, **details) -> None:
         st.session_state.diagnostics.append(entry)
         st.session_state.diagnostics = st.session_state.diagnostics[-100:]
     DIAGNOSTIC_LOGGER.info(json.dumps(entry, ensure_ascii=False, default=str))
+
+
+def render_bug_report_form() -> None:
+    """Render a minimal, privacy-conscious report form; never include session data."""
+    form_keys = (
+        "bug_report_category",
+        "bug_report_steps",
+        "bug_report_expected",
+        "bug_report_actual",
+        "bug_report_contact_email",
+        "bug_report_contact_consent",
+        "bug_report_no_case_data",
+    )
+    if st.session_state.pop("bug_report_clear_form", False):
+        for key in form_keys:
+            st.session_state.pop(key, None)
+
+    with st.expander("🐞 דיווח על תקלה", expanded=False):
+        st.caption(
+            "הדיווח מיועד לבטא עם נתונים מומצאים בלבד. אל תכללו פרטי תיק, שמות, "
+            "כתובות, מספרי זהות, טלפונים, צילומי מסך או את תוכן השיחה."
+        )
+        database_url = os.getenv("BUG_REPORTS_DATABASE_URL", "").strip()
+        if not database_url:
+            st.info(
+                "שליחת דיווח עדיין לא הוגדרה בשרת. לא נאספים או נשמרים כאן פרטי טופס."
+            )
+            return
+
+        success_id = st.session_state.pop("bug_report_success_id", None)
+        if success_id:
+            st.success(f"הדיווח נשמר. מספר דיווח: {success_id}")
+
+        category_labels = {
+            "ui": "ממשק ותצוגה",
+            "interview": "שיחה ואיסוף פרטים",
+            "draft_pdf": "טיוטה או PDF",
+            "legal_sources": "מקורות משפטיים",
+            "llm_provider": "מודל או ספק AI",
+            "other": "אחר",
+        }
+        with st.form("bug_report_form", clear_on_submit=False):
+            category = st.selectbox(
+                "באיזה חלק נתקלתם בתקלה?",
+                options=list(category_labels),
+                format_func=lambda value: category_labels[value],
+                key="bug_report_category",
+            )
+            reproduction_steps = st.text_area(
+                "איך אפשר לשחזר את התקלה? (בלי פרטי תיק)",
+                max_chars=2000,
+                key="bug_report_steps",
+            )
+            expected_behavior = st.text_area(
+                "מה ציפיתם שיקרה?", max_chars=1200, key="bug_report_expected"
+            )
+            actual_behavior = st.text_area(
+                "מה קרה בפועל?", max_chars=1200, key="bug_report_actual"
+            )
+            contact_email = st.text_input(
+                "דוא״ל ליצירת קשר (רשות)",
+                max_chars=254,
+                key="bug_report_contact_email",
+            ).strip()
+            contact_consent = st.checkbox(
+                "אני מסכים/ה לשמירת הדוא״ל בנפרד, לצורך בירור הדיווח בלבד.",
+                key="bug_report_contact_consent",
+            )
+            no_case_data = st.checkbox(
+                "אני מאשר/ת שהדיווח מכיל נתונים מומצאים בלבד ואינו כולל פרטים אישיים או תוכן מתיק.",
+                key="bug_report_no_case_data",
+            )
+            submitted = st.form_submit_button("שליחת דיווח", type="primary")
+
+        if not submitted:
+            return
+        if not no_case_data:
+            st.error("יש לאשר שהדיווח מכיל נתונים מומצאים בלבד לפני השליחה.")
+            return
+        app_version = os.getenv("APP_VERSION", "").strip()
+        if not app_version:
+            app_version = os.getenv("GITHUB_SHA", "local")[:80]
+        try:
+            report = BugReport(
+                category=category,
+                reproduction_steps=reproduction_steps,
+                expected_behavior=expected_behavior,
+                actual_behavior=actual_behavior,
+                app_version=app_version,
+                contact_email=contact_email or None,
+                contact_email_consent=contact_consent,
+            )
+            report_id = submit_bug_report(report, database_url)
+        except BugReportStoreError:
+            record_diagnostic("bug_report_submission_failed")
+            st.error("לא הצלחנו לשמור את הדיווח. נסו שוב מאוחר יותר.")
+        except ValueError:
+            st.error(
+                "לא ניתן לשלוח את הדיווח. מלאו את כל השדות, הסירו פרטים מזהים, "
+                "ואשרו הסכמה לשמירת דוא״ל אם הוזן."
+            )
+        else:
+            st.session_state["bug_report_success_id"] = str(report_id)[:8]
+            st.session_state["bug_report_clear_form"] = True
+            st.rerun()
 
 
 def reset_interview() -> None:
@@ -1018,6 +1127,7 @@ st.markdown(
     "תשובות לשאלות זיהוי נשמרות במצב המקומי ואינן נשלחות לספקי ה־LLM.</div>",
     unsafe_allow_html=True,
 )
+render_bug_report_form()
 
 with st.sidebar:
     st.header("מצב הראיון")

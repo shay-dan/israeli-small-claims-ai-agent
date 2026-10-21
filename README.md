@@ -73,6 +73,7 @@ After LangGraph returns a reviewed draft, Streamlit runs a separate, bounded com
 | OpenAI SDK | One OpenAI-compatible client for Groq and OpenRouter structured outputs | Separate vendor SDKs are available but would duplicate request plumbing |
 | Gemini API + LangChain Google GenAI | Final hosted-provider fallback, using structured output through the existing Gemini adapter | Direct Google SDK calls are lighter but require more orchestration code |
 | Pydantic | The `CaseData` schema and validation boundary for model/user data | Plain dictionaries are simpler but less safe and harder to audit |
+| PostgreSQL + Psycopg | Dedicated relational store for structured beta bug reports, with contact email isolated in a second table | A feedback SaaS is quicker to start but adds another processor and less control over retention/data location |
 | JSON targeted RAG | Small, transparent and version-controlled legal source set | A vector database is unnecessary for this narrow corpus |
 | ReportLab + python-bidi | Local, deterministic Hebrew PDF export | WeasyPrint/Chromium provide richer CSS but add system dependencies |
 
@@ -92,6 +93,16 @@ streamlit run app.py
 Provider order is Groq (`GROQ_MODEL`, default `openai/gpt-oss-120b`), OpenRouter (`OPENROUTER_MODEL`, default `openrouter/free`), then Gemini (`GEMINI_MODEL`). Providers without configured keys are skipped. Groq and OpenRouter use the OpenAI-compatible SDK; Gemini is last among hosted providers. If all configured providers fail, LangGraph falls back to deterministic local behavior. Failover occurs for availability, timeout, quota/rate-limit, authentication and provider/server failures; malformed requests and locally invalid structured output are surfaced instead of silently retried through another provider.
 
 Persistent diagnostic file logging is disabled by default. Set `ENABLE_DIAGNOSTIC_FILE_LOG=1` only for local debugging; logs are ignored by Git. Diagnostics report provider/model and safe error categories, not prompts, responses, API keys, or party identifiers.
+
+## Closed-beta bug reports
+
+The sidebar includes a bug-report form. It stores only a category, reproduction steps, expected/actual behavior, and an app version. It never attaches the interview, case state, diagnostic log, screenshot, IP address, or browser fingerprint. Free-text fields are screened for common personal-data patterns, and submitters must confirm that they used fictional data. An optional follow-up email is stored in a separate table only after explicit consent.
+
+For local development, copy `.env.postgres.example` to the ignored `.env.postgres`, set two distinct random passwords, then run `docker compose --env-file .env.postgres up -d`. The compose service binds only to `127.0.0.1`, persists data in a named Docker volume, initializes the schema, and gives the app an insert-only database role. The app loads this local file separately from `.env`; neither secret file belongs in Git. The dependency `psycopg[binary]` is included in `requirements.txt`.
+
+For a hosted deployment, provision a dedicated PostgreSQL database and apply [`db/bug_reports_schema.sql`](db/bug_reports_schema.sql) with an owner/admin account, after creating the `bug_report_writer` role. Configure `BUG_REPORTS_DATABASE_URL` only in the Streamlit server environment (never in browser code or a public repository). TLS is required by default (`sslmode=require`); for a local-only PostgreSQL instance, an explicit `sslmode=disable` URL is accepted. Use a managed secret store in production. If the URL is absent, the form explains that reporting is not configured and does not collect fields. The app does not create tables or migrate the database at runtime.
+
+This database is for synthetic-data beta feedback only. Do not reuse it for real case records; future case storage needs a separate privacy/security design, data lifecycle, and legal review. Set and enforce a short retention period for closed reports before inviting external testers.
 
 ## Tests and reproducible outputs
 
@@ -155,11 +166,12 @@ scripts/                       Reproducible artifacts and smoke/audit tools
 tests/                         Unit, integration and deep-smoke tests
 output/                        Portfolio-ready Markdown and PDF examples
 docs/                          Screenshot and recorded walkthrough
+db/                            PostgreSQL schema for isolated beta bug reports
 ```
 
 ## Known production gaps
 
-This is a polished MVP, not a production legal service. The curated legal corpus and filing-fee/jurisdiction assumptions can become outdated and must be independently verified; generated drafts are not legal advice and are not guaranteed to be accepted by a court. Production work would include authenticated encrypted persistence, a maintained and versioned legal-content pipeline, accessibility and cross-browser testing, observability without sensitive data, rate limiting, deployment hardening, and professional legal/privacy review.
+This is a polished MVP, not a production legal service. The curated legal corpus and filing-fee/jurisdiction assumptions can become outdated and must be independently verified; generated drafts are not legal advice and are not guaranteed to be accepted by a court. Production work would include authenticated encrypted case persistence, a maintained and versioned legal-content pipeline, accessibility and cross-browser testing, observability without sensitive data, abuse/rate limiting for public feedback, deployment hardening, and professional legal/privacy review.
 
 ## License
 
